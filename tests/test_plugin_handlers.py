@@ -854,3 +854,118 @@ def test_web_api_import_requires_fields(plugin):
     web.request.body = {"owner_id": "40001"}
     missing_text = asyncio.run(plugin._api_import())
     assert isinstance(missing_text, tuple) and missing_text[1] == 400
+
+
+async def _dispatch_all(plugin, text, group="g1"):
+    event = _Event(text, group=group)
+    outs = [item async for item in plugin._dispatch(event)]
+    return event, [out if isinstance(out, str) else str(out) for out in outs]
+
+
+def test_dispatch_share_code_reaches_importer(plugin):
+    # 参数必须原样传给导入器；不能回落到帮助文本
+    _event, outs = asyncio.run(_dispatch_all(plugin, "/课表 导入 球场三分线已开门"))
+    assert outs == ["❌ 导入失败：当前配置禁止联网导入"]
+
+
+def test_dispatch_import_json(plugin):
+    payload = json.dumps(
+        {
+            "name": "分发测试",
+            "term_start": "2026-09-07",
+            "total_weeks": 18,
+            "courses": [
+                {"name": "高等数学", "day": 2, "start": "08:00", "end": "09:40", "weeks": "1-16"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+    _event, outs = asyncio.run(_dispatch_all(plugin, "/课表 导入 " + payload))
+    assert "已导入课表「分发测试」" in outs[0]
+    assert plugin.store.get("test:10001").courses[0].name == "高等数学"
+
+
+def test_dispatch_leave_adjust_makeup(plugin):
+    payload = json.dumps(
+        {
+            "name": "分发测试",
+            "term_start": "2026-09-07",
+            "total_weeks": 18,
+            "courses": [
+                {"name": "高等数学", "day": 2, "start": "08:00", "end": "09:40", "weeks": "1-16"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+    asyncio.run(_dispatch_all(plugin, "/课表 导入 " + payload))
+
+    _event, outs = asyncio.run(_dispatch_all(plugin, "/课表 请假 9/8 病假"))
+    assert "已登记请假" in outs[0]
+
+    _event, outs = asyncio.run(_dispatch_all(plugin, "/课表 调课 9/8 9/9"))
+    assert "已把 09/08 的 高等数学 调到 09/09" in outs[0]
+
+    _event, outs = asyncio.run(_dispatch_all(plugin, "/课表 调休 9/27 周一"))
+    assert "按周一课表" in outs[0]
+
+    tt = plugin.store.get("test:10001")
+    assert len(tt.leaves) == 1
+    assert len(tt.adjustments) == 1
+    assert tt.makeup_days == {"2026-09-27": 1}
+
+
+def test_glued_commands_route(plugin):
+    payload = json.dumps(
+        {
+            "name": "粘连测试",
+            "term_start": "2026-09-07",
+            "total_weeks": 18,
+            "courses": [
+                {"name": "高等数学", "day": 2, "start": "08:00", "end": "09:40", "weeks": "1-16"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+    async def glued(text, group="g1"):
+        event = _Event(text, group=group)
+        outs = [item async for item in plugin.cmd_glued(event)]
+        return event, [out if isinstance(out, str) else str(out) for out in outs]
+
+    _event, outs = asyncio.run(glued("课表导入" + payload))
+    assert "已导入课表「粘连测试」" in outs[0]
+
+    _event, outs = asyncio.run(glued("课表请假 9/8 病假"))
+    assert "已登记请假" in outs[0]
+
+    _event, outs = asyncio.run(glued("课表调课9/8 9/9"))
+    assert "已把 09/08 的 高等数学 调到 09/09" in outs[0]
+
+    _event, outs = asyncio.run(glued("课表调课撤销9/9"))
+    assert "已撤销 09/09 相关的 1 条调课记录" in outs[0]
+    assert plugin.store.get("test:10001").adjustments == []
+
+
+def test_fallback_sections_shapes(plugin):
+    plugin.config["default_section_times"] = "1 08:00-08:45\n2 08:55-09:40"
+    sections = plugin._fallback_sections()
+    assert [s.index for s in sections] == [1, 2]
+    assert sections[0].start == "08:00"
+
+    plugin.config["default_section_times"] = [
+        {"__template_key": "section", "index": 3, "start": "10:00", "end": "10:45", "alias": ""}
+    ]
+    sections = plugin._fallback_sections()
+    assert [s.index for s in sections] == [3]
+    assert sections[0].end == "10:45"
+
+    plugin.config["default_section_times"] = []
+    assert len(plugin._fallback_sections()) >= 12
+
+
+def test_section_config_migration(plugin):
+    plugin.config["default_section_times"] = "1 08:00-08:45\n2 08:55-09:40"
+    assert plugin._migrate_section_config() is True
+    value = plugin.config["default_section_times"]
+    assert isinstance(value, list) and value[0]["index"] == 1
+    assert plugin._fallback_sections()[0].start == "08:00"
+    assert plugin._migrate_section_config() is False

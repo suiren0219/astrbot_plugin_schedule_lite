@@ -163,6 +163,10 @@ SUBCOMMANDS = {
     "在上": "everyone", "谁": "everyone", "全员": "everyone", "everyone": "everyone",
     "导出": "export", "export": "export",
     "学期": "term", "开学": "term", "term": "term",
+    "请假": "leave", "leave": "leave",
+    "销假": "leave_cancel", "leave_cancel": "leave_cancel",
+    "调课": "adjust", "adjust": "adjust",
+    "调休": "makeup", "makeup": "makeup", "补班": "makeup",
 }
 
 RANK_MODES = {
@@ -177,7 +181,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.4.2",
+    "v1.4.3",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -214,6 +218,8 @@ class ScheduleLitePlugin(Star):
         if self._scrub_privacy():
             await self._save()
             logger.info(f"[{PLUGIN_NAME}] 已按隐私配置清除历史课表中的教师/地点")
+        if self._migrate_section_config():
+            logger.info(f"[{PLUGIN_NAME}] 已把默认作息迁移为列表结构")
         self._load_broadcast_state()
         self._load_holiday_cache(self._now().year)
         if self._cfg("holiday_enabled", True):
@@ -271,9 +277,30 @@ class ScheduleLitePlugin(Star):
         return datetime.now(get_tz(self._tz))
 
     def _fallback_sections(self):
-        text = str(self._cfg("default_section_times", "") or "")
-        sections = parse_section_text(text)
+        """默认作息：兼容旧版多行文本和 template_list 的列表结构。"""
+        value = self._cfg("default_section_times", "")
+        if isinstance(value, str):
+            sections = parse_section_text(value)
+        else:
+            sections = parse_section_times(value)
         return sections or default_sections()
+
+    def _migrate_section_config(self) -> bool:
+        """把旧版多行文本作息迁移成 template_list 的列表结构。"""
+        value = self._cfg("default_section_times", None)
+        if not isinstance(value, str) or not value.strip():
+            return False
+        sections = parse_section_text(value)
+        if not sections:
+            return False
+        self.config["default_section_times"] = [
+            {"index": s.index, "start": s.start, "end": s.end, "alias": s.alias}
+            for s in sections
+        ]
+        save_config = getattr(self.config, "save_config", None)
+        if callable(save_config):
+            save_config()
+        return True
 
     def _default_total_weeks(self) -> int:
         try:
@@ -634,7 +661,9 @@ class ScheduleLitePlugin(Star):
 
     async def _dispatch(self, event, rest_override: str | None = None):
         rest = rest_override if rest_override is not None else self._rest(event)
-        first, _, tail = (re.split(r"\s+", rest, maxsplit=1) + ["", ""])[:3]
+        parts = re.split(r"\s+", rest.strip(), maxsplit=1)
+        first = parts[0] if parts else ""
+        tail = parts[1] if len(parts) > 1 else ""
         sub = SUBCOMMANDS.get(first.lower()) if first else None
 
         if sub == "help":
@@ -1712,9 +1741,9 @@ class ScheduleLitePlugin(Star):
 
         today = self._now().date()
         if text.startswith(("撤销", "撤回", "undo")):
-            parts = text.split(maxsplit=1)
-            if len(parts) == 2:
-                target = self._parse_cmd_date(parts[1], today)
+            undo_rest = re.sub(r"^(?:撤销|撤回|undo)\s*", "", text, flags=re.I).strip()
+            if undo_rest:
+                target = self._parse_cmd_date(undo_rest, today)
                 if target is None:
                     yield event.plain_result("日期没看懂，示例：/课表 调课 撤销 9/10")
                     return
