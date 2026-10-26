@@ -653,18 +653,19 @@ def test_showcase_broadcast_once(tmp_path):
 
 
 def test_recap_broadcast_on_configured_weekday(tmp_path):
-    today = __import__("datetime").date.today()
     plugin, ctx = _scheduled_plugin(
         tmp_path,
         {
             "showcase_enabled": False,
             "recap_enabled": True,
-            "recap_weekday": today.isoweekday(),
             "recap_time": "21:00",
             "recap_mode": "week",
             "recap_top": 5,
         },
     )
+    # 发送星期取插件时区（Asia/Shanghai）的今天，不能用测试机本地日期：
+    # CI 机器是 UTC，UTC 下午的上海日期已经翻到次日，会对不上星期。
+    plugin.config["recap_weekday"] = plugin._now().date().isoweekday()
     now = plugin._now().replace(hour=21, minute=5, second=0, microsecond=0)
     asyncio.run(plugin._check_scheduled_broadcasts(now))
     assert len(ctx.sent) == 1
