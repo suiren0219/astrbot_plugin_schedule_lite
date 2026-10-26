@@ -31,7 +31,7 @@ BLBot 式课表功能的 AstrBot 独立实现。重点在**导入**：把不同�
 
 1. 把整个 `astrbot_plugin_schedule_lite` 目录放进 AstrBot 的 `data/plugins/`
 2. 在面板启用插件，按需修改配置
-3. 依赖：`aiohttp`、`Pillow`；Windows 上建议装 `tzdata` 以正确解析其他时区（缺省仍可用 UTC+8）
+3. 依赖：AstrBot ≥ 4.10.4（配置页的作息列表用到 `template_list`）、`aiohttp`、`Pillow`；Windows 上建议装 `tzdata` 以正确解析其他时区（缺省仍可用 UTC+8）
 4. 图片功能需要中文字体。Windows/macOS 会自动找到系统字体；Linux 服务器请安装
    `fonts-noto-cjk` 或在配置里填 `font_path`
 
@@ -218,7 +218,7 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 
 | 配置项 | 默认 | 说明 |
 | --- | --- | --- |
-| `default_section_times` | 12 节常见作息 | 数据没有作息时的兜底 |
+| `default_section_times` | 空（内置 12 节） | 结构化作息列表（template_list）；旧版多行文本会在启动时自动迁移 |
 | `default_total_weeks` | 20 | 数据没有总周数时使用 |
 | `timezone` | Asia/Shanghai | 课表解释时区 |
 | `store_teacher` | false | 是否保存/显示教师（默认丢弃） |
