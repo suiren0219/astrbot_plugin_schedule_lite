@@ -1,0 +1,22 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+.env
+
+# 本地运行数据与日志
+data/
+plugin_data/
+*.log
+*.tmp
+gcm-diagnose.log
+
+# 截图和构建产物
+panel-*.png
+*.zip
+
+.DS_Store
+Thumbs.db
