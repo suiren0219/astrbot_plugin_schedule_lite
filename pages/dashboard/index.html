@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>课表 Lite 控制台</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem("schedule-lite-theme") || "auto";
+        var dark = window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.dataset.theme =
+          saved === "auto" ? (dark ? "dark" : "light") : saved;
+      } catch (e) {}
+    })();
+  </script>
+  <link rel="stylesheet" href="./miuix.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="hero">
+      <div class="hero-icon">课</div>
+      <div class="hero-copy">
+        <p class="eyebrow">AstrBot Plugin</p>
+        <h1>课表 Lite</h1>
+        <p class="hero-sub">导入、查询、调课、请假与群友状态，一处管理。</p>
+      </div>
+      <div class="hero-meta">
+        <button class="icon-btn theme-toggle" id="theme-toggle" type="button"
+                title="切换主题" aria-label="切换主题">◐</button>
+        <span class="dot" id="conn-dot"></span>
+        <span id="conn-text">正在连接…</span>
+      </div>
+    </header>
+
+    <main>
+      <section id="view-overview" class="view">
+        <div class="stat-grid">
+          <article class="card stat"><span>绑定用户</span><strong id="stat-users">—</strong><small>本机课表记录</small></article>
+          <article class="card stat"><span>课程安排</span><strong id="stat-courses">—</strong><small>去重后的条目</small></article>
+          <article class="card stat"><span>活跃群</span><strong id="stat-groups">—</strong><small>有会话记录</small></article>
+          <article class="card stat"><span>今日</span><strong id="stat-today">—</strong><small id="stat-holiday">—</small></article>
+        </div>
+        <div class="card">
+          <div class="section-head">
+            <div><h2>现在的状态</h2><p>本地计算，不请求外部接口</p></div>
+            <button class="btn ghost" id="refresh-live">刷新</button>
+          </div>
+          <div id="live-list" class="live-list"><div class="empty">加载中…</div></div>
+        </div>
+        <div class="card">
+          <div class="section-head"><div><h2>今日分布</h2><p>按状态优先级排序</p></div></div>
+          <div id="status-chips" class="chips"></div>
+        </div>
+      </section>
+
+      <section id="view-data" class="view" hidden>
+        <div class="card">
+          <div class="section-head">
+            <div><h2>课表数据</h2><p>可以直接新增、编辑或删除绑定记录</p></div>
+            <div class="row-actions">
+              <input id="search" class="input" placeholder="搜索昵称 / QQ / 课表名">
+              <button class="btn primary" id="add-record">新增课表</button>
+            </div>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>用户</th><th>课表</th><th>学期</th><th>课程</th><th>群</th><th>操作</th></tr></thead>
+              <tbody id="record-body"><tr><td colspan="6" class="empty">加载中…</td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <section id="view-holiday" class="view" hidden>
+        <div class="card">
+          <div class="section-head">
+            <div><h2>节假日与调休</h2><p>查询时只读本地缓存，后台定期刷新</p></div>
+            <div class="row-actions">
+              <input id="holiday-year" class="input short" type="number" min="2020" max="2100">
+              <button class="btn ghost" id="load-holiday">读取</button>
+              <button class="btn primary" id="refresh-holiday">刷新缓存</button>
+            </div>
+          </div>
+          <p class="muted" id="holiday-source">—</p>
+          <div id="holiday-list" class="holiday-list"><div class="empty">加载中…</div></div>
+        </div>
+      </section>
+
+      <section id="view-settings" class="view" hidden>
+        <div class="card">
+          <div class="section-head"><div><h2>展示与隐私</h2><p>关闭教师/地点后，导入会直接丢弃</p></div></div>
+          <div class="setting-grid">
+            <label class="setting"><span><b>保存任课教师</b><small>默认关闭</small></span><input type="checkbox" id="set-store-teacher"></label>
+            <label class="setting"><span><b>保存上课地点</b><small>默认关闭</small></span><input type="checkbox" id="set-store-location"></label>
+            <label class="setting"><span><b>群友状态图片</b><small>失败自动退回文字</small></span><input type="checkbox" id="set-everyone-image"></label>
+            <label class="setting"><span><b>帮助合并转发图片</b><small>/课表 帮助</small></span><input type="checkbox" id="set-help-image"></label>
+            <label class="setting"><span><b>隐藏无课同学</b><small>超过人数时</small></span><input class="input short" type="number" id="set-hide-idle"></label>
+            <label class="setting"><span><b>每页人数</b><small>大于 8 人自动分页</small></span><input class="input short" type="number" id="set-page-size"></label>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-head"><div><h2>定时节目</h2><p>只发到有课表用户的群，不私聊</p></div></div>
+          <div class="setting-grid">
+            <label class="setting"><span><b>今日满课榜</b><small>每天固定时间</small></span><input type="checkbox" id="set-showcase"></label>
+            <label class="setting"><span><b>满课时间</b><small>HH:MM</small></span><input class="input short" id="set-showcase-time" placeholder="22:30"></label>
+            <label class="setting"><span><b>最低课时</b><small>分钟</small></span><input class="input short" type="number" id="set-showcase-min"></label>
+            <label class="setting"><span><b>最少人数</b><small>不足则不发送</small></span><input class="input short" type="number" id="set-showcase-users"></label>
+            <label class="setting"><span><b>周/月累计榜</b><small>周五或假日前一天</small></span><input type="checkbox" id="set-recap"></label>
+            <label class="setting"><span><b>发送星期</b><small>1=周一</small></span><input class="input short" type="number" id="set-recap-weekday"></label>
+            <label class="setting"><span><b>发送时间</b><small>HH:MM</small></span><input class="input short" id="set-recap-time"></label>
+            <label class="setting"><span><b>累计范围</b><small>本周或本月</small></span>
+              <select class="input" id="set-recap-mode"><option value="week">本周</option><option value="month">本月</option></select>
+            </label>
+            <label class="setting"><span><b>展示人数</b><small>Top N</small></span><input class="input short" type="number" id="set-recap-top"></label>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-head"><div><h2>节假日数据</h2><p>国务院通知整理源，失败自动回退</p></div></div>
+          <div class="setting-grid">
+            <label class="setting"><span><b>启用调休判断</b><small>查询时本地生效</small></span><input type="checkbox" id="set-holiday-enabled"></label>
+            <label class="setting wide"><span><b>数据源</b><small>支持 {year} 占位符</small></span><input class="input" id="set-holiday-url"></label>
+            <label class="setting"><span><b>缓存小时</b><small>后台刷新间隔</small></span><input class="input short" type="number" id="set-holiday-hours"></label>
+          </div>
+        </div>
+        <div class="save-bar"><button class="btn primary" id="save-settings">保存设置</button></div>
+      </section>
+    </main>
+
+    <nav class="tabbar" id="tabbar">
+      <button class="tab active" data-view="overview"><span>◉</span>概览</button>
+      <button class="tab" data-view="data"><span>▤</span>数据</button>
+      <button class="tab" data-view="holiday"><span>▦</span>调休</button>
+      <button class="tab" data-view="settings"><span>⚙</span>设置</button>
+    </nav>
+  </div>
+
+  <div class="sheet-mask" id="editor-mask" hidden>
+    <div class="sheet">
+      <div class="sheet-head">
+        <div><h2 id="editor-title">新增课表</h2><p class="muted" id="editor-key"></p></div>
+        <button class="icon-btn" id="editor-close">✕</button>
+      </div>
+      <div class="form-grid">
+        <label>平台<input class="input" id="f-platform" placeholder="aiocqhttp" value="aiocqhttp"></label>
+        <label>用户 ID<input class="input" id="f-owner-id" placeholder="QQ 号"></label>
+        <label>昵称<input class="input" id="f-owner-name" placeholder="张三"></label>
+        <label>课表名<input class="input" id="f-name" placeholder="我的课表"></label>
+        <label>开学日期<input class="input" id="f-term" placeholder="2026-09-07"></label>
+        <label>总周数<input class="input" type="number" id="f-weeks" value="20"></label>
+        <label>时区<input class="input" id="f-tz" value="Asia/Shanghai"></label>
+      </div>
+      <div class="section-head compact"><div><h3>课程安排</h3></div><button class="btn ghost" id="add-course">添加一门课</button></div>
+      <div id="course-editor" class="course-editor"></div>
+      <div class="sheet-actions">
+        <button class="btn danger ghost" id="delete-record">删除课表</button>
+        <span class="spacer"></span>
+        <button class="btn ghost" id="cancel-edit">取消</button>
+        <button class="btn primary" id="save-record">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" hidden></div>
+  <script src="./app.js"></script>
+</body>
+</html>

@@ -1,0 +1,249 @@
+{
+  "notice": {
+    "description": "📚 已接入：/课表 · 在上 · 排行 · 导入 · 请假 · 销假 · 调课 · 调休 · 提醒 · 备注 · 翘课 · 作息",
+    "type": "string",
+    "default": "",
+    "invisible": true
+  },
+  "default_section_times": {
+    "description": "🕘 默认作息（导入数据没有作息时兜底）",
+    "type": "text",
+    "default": "1 08:00-08:45\n2 08:55-09:40\n3 10:00-10:45\n4 10:55-11:40\n5 14:00-14:45\n6 14:55-15:40\n7 16:00-16:45\n8 16:55-17:40\n9 19:00-19:45\n10 19:55-20:40\n11 20:50-21:35\n12 21:45-22:30",
+    "hint": "每行「节次 开始-结束」。小爱/WakeUp/拾光自带作息时优先用数据里的；只有节次没有时间时才用这里。",
+    "editor_mode": true,
+    "editor_language": "plaintext",
+    "editor_theme": "vs-light",
+    "full_width": true
+  },
+  "default_total_weeks": {
+    "description": "📅 默认学期总周数",
+    "type": "int",
+    "default": 20,
+    "hint": "导入数据里没有总周数时使用；课程周次超过这个值会自动放宽，不会丢课。",
+    "slider": {
+      "min": 8,
+      "max": 40,
+      "step": 1
+    }
+  },
+  "timezone": {
+    "description": "🌏 时区",
+    "type": "string",
+    "default": "Asia/Shanghai",
+    "hint": "课表时间按这个时区解释；iCalendar 里的 UTC/TZID 时间会转换到这里。"
+  },
+  "store_teacher": {
+    "description": "👤 保存并显示任课教师",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭：导入时直接丢弃教师字段，查询、导出和提醒里都不会出现。"
+  },
+  "store_location": {
+    "description": "📍 保存并显示上课地点",
+    "type": "bool",
+    "default": false,
+    "hint": "默认关闭：导入时直接丢弃教室/地点字段，查询、导出和提醒里都不会出现。打开后需要重新导入课表才会补回地点。"
+  },
+  "allow_group_query": {
+    "description": "👥 允许在群里查看他人课表",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后只能查自己的课表；「在上」和「排行」仍只统计本群用过课表的人。"
+  },
+  "allow_cross_group": {
+    "description": "🔀 允许跨群查询他人课表",
+    "type": "bool",
+    "default": false,
+    "hint": "默认只能查「在本群用过课表」的人；打开后任何群都能通过 QQ 号查询，隐私性更弱。"
+  },
+  "allow_network": {
+    "description": "🌐 允许联网导入",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后只能导入 JSON/ICS/CSV 文本或文件，不能读取小爱/WakeUp/ICS 链接。"
+  },
+  "allow_private_network": {
+    "description": "🏠 允许访问内网地址",
+    "type": "bool",
+    "default": false,
+    "hint": "默认禁止从用户给的链接访问局域网/127.0.0.1/云元数据地址，防止 SSRF。只在你确实要从内网服务器导入时打开。"
+  },
+  "max_file_kb": {
+    "description": "📦 导入文件大小上限（KB）",
+    "type": "int",
+    "default": 2048,
+    "slider": {
+      "min": 64,
+      "max": 16384,
+      "step": 64
+    }
+  },
+  "notify_enabled": {
+    "description": "⏰ 启用上课提醒",
+    "type": "bool",
+    "default": true,
+    "hint": "总开关；单个用户用 /课表 提醒 15 开启。提醒只走私聊会话。"
+  },
+  "notify_check_seconds": {
+    "description": "⏱️ 提醒检查间隔（秒）",
+    "type": "int",
+    "default": 60,
+    "hint": "每轮检查「即将开始」的课程；30~600 秒。",
+    "slider": {
+      "min": 30,
+      "max": 600,
+      "step": 30
+    }
+  },
+  "help_image": {
+    "description": "🖼️ 帮助用合并转发图片",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后 /课表 帮助 会把 Markdown 手册渲染成几张图片，放在一条合并消息里发送；帮助文档和图片会留存在数据目录 help/ 下。"
+  },
+  "everyone_image": {
+    "description": "🎨 群友在上什么课用图片",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后 /课表 在上 发送状态卡片图片；关闭或生成失败时自动退回文字版。"
+  },
+  "image_width": {
+    "description": "📐 图片宽度（像素）",
+    "type": "int",
+    "default": 900,
+    "hint": "帮助长图和群友卡片的渲染宽度，高度按内容自动计算。",
+    "slider": {
+      "min": 540,
+      "max": 1200,
+      "step": 60
+    }
+  },
+  "font_path": {
+    "description": "🔤 自定义中文字体路径",
+    "type": "string",
+    "default": "",
+    "hint": "留空会自动查找微软雅黑/黑体/思源黑体等。Linux 服务器没装中文字体时请填一个 .ttf/.ttc/.otf 的绝对路径。"
+  },
+  "everyone_page_size": {
+    "description": "👥 每页显示人数",
+    "type": "int",
+    "default": 8,
+    "hint": "群里人多时会自动分页，每页一张图。",
+    "slider": {
+      "min": 4,
+      "max": 20,
+      "step": 1
+    }
+  },
+  "everyone_hide_idle_over": {
+    "description": "👥 人数过多时隐藏无课同学",
+    "type": "int",
+    "default": 12,
+    "hint": "群友超过这个人数时，状态卡片优先保留翘课/请假/有课的人，隐藏无课的人；设为 0 不隐藏。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 1
+    }
+  },
+  "holiday_enabled": {
+    "description": "📅 启用国务院节假日/调休",
+    "type": "bool",
+    "default": true,
+    "hint": "后台自动缓存年度放假与补班数据；查询时只读本地缓存，不访问网络。"
+  },
+  "holiday_api_url": {
+    "description": "🌐 节假日数据源",
+    "type": "string",
+    "default": "https://timor.tech/api/holiday/year/{year}",
+    "hint": "支持 {year} 占位符。失败会自动回退 holiday-cn；国务院没有公开 JSON API，这里使用其通知整理的数据。"
+  },
+  "holiday_cache_hours": {
+    "description": "⏱️ 节假日缓存小时数",
+    "type": "int",
+    "default": 24,
+    "slider": {
+      "min": 1,
+      "max": 168,
+      "step": 1
+    }
+  },
+  "showcase_enabled": {
+    "description": "🌙 启用今日满课榜",
+    "type": "bool",
+    "default": false,
+    "hint": "每天在设定时间向有课表用户的群发送当天满课学生；不会私聊。"
+  },
+  "showcase_time": {
+    "description": "🕙 满课榜发送时间",
+    "type": "string",
+    "default": "22:30",
+    "hint": "24 小时制 HH:MM，通常设在晚上。"
+  },
+  "showcase_min_minutes": {
+    "description": "⏳ 满课榜最低课时（分钟）",
+    "type": "int",
+    "default": 300,
+    "slider": {
+      "min": 30,
+      "max": 720,
+      "step": 30
+    }
+  },
+  "showcase_min_users": {
+    "description": "👥 满课榜最少人数",
+    "type": "int",
+    "default": 2,
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    },
+    "hint": "本群达到这个人数才发送，避免只有一个同学时刷屏。"
+  },
+  "recap_enabled": {
+    "description": "📊 启用周/月累计榜",
+    "type": "bool",
+    "default": false,
+    "hint": "在周五或法定假日前一天，按设定时间发送本群累计上课时长榜。"
+  },
+  "recap_weekday": {
+    "description": "🗓️ 累计榜发送星期",
+    "type": "int",
+    "default": 5,
+    "slider": {
+      "min": 1,
+      "max": 7,
+      "step": 1
+    },
+    "hint": "1=周一 … 7=周日。法定假日前一天也会触发。"
+  },
+  "recap_time": {
+    "description": "🕘 累计榜发送时间",
+    "type": "string",
+    "default": "21:00"
+  },
+  "recap_mode": {
+    "description": "📈 累计范围",
+    "type": "string",
+    "default": "week",
+    "options": [
+      "week",
+      "month"
+    ],
+    "labels": [
+      "本周（周一到今天）",
+      "本月（1 号到今天）"
+    ]
+  },
+  "recap_top": {
+    "description": "🏅 累计榜展示人数",
+    "type": "int",
+    "default": 5,
+    "slider": {
+      "min": 1,
+      "max": 20,
+      "step": 1
+    }
+  }
+}
