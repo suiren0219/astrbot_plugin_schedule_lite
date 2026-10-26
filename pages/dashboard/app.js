@@ -169,6 +169,7 @@
     }
     if (path === "timetable/save") return { ...(body || {}), key: (body && body.key) || "preview" };
     if (path === "timetable/delete") return { deleted: (body && body.key) || "" };
+    if (path === "import") throw new Error("预览模式不支持导入，请连接 AstrBot 后台");
     if (path === "settings/save") return body || {};
     if (path === "holidays/refresh") {
       return { year: now.getFullYear(), source: "", updated_at: "", count: 0 };
@@ -556,6 +557,55 @@
     }
   }
 
+  async function onImportFile(event) {
+    const input = event.target;
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      if (typeof file.text === "function") {
+        $("#import-text").value = await file.text();
+      } else {
+        $("#import-text").value = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result || ""));
+          reader.onerror = () => reject(new Error("读取失败"));
+          reader.readAsText(file);
+        });
+      }
+      toast(`已读取 ${file.name}，点击导入完成解析`);
+    } catch (err) {
+      toast(`读取文件失败：${err.message}`);
+    }
+  }
+
+  async function importData() {
+    const payload = {
+      platform: $("#import-platform").value.trim() || "aiocqhttp",
+      owner_id: $("#import-owner-id").value.trim(),
+      owner_name: $("#import-owner-name").value.trim(),
+      text: $("#import-text").value.trim(),
+    };
+    if (!payload.owner_id) return toast("请填写用户 ID");
+    if (!payload.text) return toast("请粘贴课表内容或选择文件");
+    const button = $("#import-submit");
+    button.disabled = true;
+    try {
+      const data = await apiPost("import", payload);
+      toast(
+        `已导入「${data.name || payload.owner_id}」：` +
+        `${data.distinct ?? data.course_count ?? 0} 门课 / ${data.course_count ?? 0} 条安排`
+      );
+      $("#import-text").value = "";
+      loadRecords();
+      loadOverview();
+    } catch (err) {
+      toast(`导入失败：${err.message}`);
+    } finally {
+      button.disabled = false;
+    }
+  }
+
   async function deleteRecord(key) {
     if (!key) return;
     const ok = await askConfirm(
@@ -688,6 +738,9 @@
     loadRecords.timer = setTimeout(loadRecords, 220);
   });
   $("#add-record").addEventListener("click", () => openEditor(""));
+  $("#import-pick").addEventListener("click", () => $("#import-file").click());
+  $("#import-file").addEventListener("change", onImportFile);
+  $("#import-submit").addEventListener("click", importData);
   $("#editor-close").addEventListener("click", closeEditor);
   $("#cancel-edit").addEventListener("click", closeEditor);
   $("#editor-mask").addEventListener("click", (event) => {
