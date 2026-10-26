@@ -35,7 +35,7 @@ STATUS_EMOJI = {0: "🟪", 1: "🟩", 2: "🟨", 3: "🟦", 4: "⬜", 5: "⬛", 
 # 群友列表排序：翘课/请假优先，其次正在上课，再到下一节，无课最后
 STATUS_PRIORITY = {2: 0, 6: 0, 1: 1, 0: 1, 3: 2, 4: 4, 5: 5}
 
-RANK_MODE_LABEL = {"today": "今日", "week": "本周", "term": "本学期"}
+RANK_MODE_LABEL = {"today": "今日", "week": "本周", "month": "本月", "term": "本学期"}
 
 
 def resolve_time(course: Course, sections: dict[int, Section]) -> tuple[str, str]:
@@ -113,7 +113,9 @@ def day_entries(
         base: list[Course] = []
     else:
         if holiday is not None and holiday.is_workday(d):
-            weekday = tt.makeup_weekday(d)
+            weekday = tt.makeup_weekday(
+                d, getattr(holiday, "makeup_weekdays", None)
+            )
         base = [c for c in tt.weekday_courses(weekday) if c.weeks and week in c.weeks]
 
     # 从这一天调出的课程
@@ -199,7 +201,10 @@ def format_day(
     if holiday_off:
         extra = f" · 🏮 {holiday_name or '法定假日'}放假"
     elif holiday_work:
-        extra = f" · 调休补班（按{WEEKDAY_CN[tt.makeup_weekday(d) - 1]}课表）"
+        makeup_day = tt.makeup_weekday(
+            d, getattr(holiday, "makeup_weekdays", None)
+        )
+        extra = f" · 调休补班（按{WEEKDAY_CN[makeup_day - 1]}课表）"
     header = f"{prefix}{owner}{day_label} · 第 {week} 周（共 {tt.total_weeks} 周）{extra}"
 
     leave = tt.leave_on(d)
@@ -447,6 +452,9 @@ def rank_hours(
 
     if mode == "today":
         days = [today]
+    elif mode == "month":
+        start = today.replace(day=1)
+        days = [start + timedelta(days=i) for i in range((today - start).days + 1)]
     elif mode == "term":
         days = [term + timedelta(days=i) for i in range(max(tt.total_weeks, 1) * 7)]
     else:
@@ -481,7 +489,7 @@ def format_rank(
     if not full:
         entries = entries[:9]
 
-    digits = {"today": 2, "week": 1, "term": 0}[mode]
+    digits = {"today": 2, "week": 1, "month": 1, "term": 0}[mode]
     lines = [title or f"{RANK_MODE_LABEL[mode]}课程时长榜"]
     prev_hours = None
     prev_rank = 0

@@ -25,6 +25,8 @@ class HolidayCalendar:
     days: dict[str, dict[str, Any]] = field(default_factory=dict)
     source: str = ""
     updated_at: str = ""
+    # 全局补班映射：2026-10-10 -> 4（按周四课表）。个人设置优先于这里。
+    makeup_weekdays: dict[str, int] = field(default_factory=dict)
 
     # ---------------------------------------------------------------- 查询
 

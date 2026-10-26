@@ -1,5 +1,7 @@
 from datetime import datetime
 
+import pytest
+
 from schedule_lite_core.importers import ics
 from schedule_lite_core.model import Timetable
 from schedule_lite_core.normalize import get_tz
@@ -230,3 +232,51 @@ def test_everyone_priority_and_hide_idle():
 
     hidden = everyone_entries(timetables, now, hide_idle_over=2)
     assert [entry["name"] for entry in hidden] == ["请假", "在上", "下一节"]
+
+
+def test_rank_month_mode():
+    from datetime import date
+
+    from schedule_lite_core.model import Course
+
+    tt = Timetable(
+        owner_id="u1",
+        term_start="2026-09-07",
+        total_weeks=20,
+        timezone="Asia/Shanghai",
+        courses=[
+            Course(name="高等数学", day=1, weeks=[1, 2, 3, 4], start="08:00", end="09:40")
+        ],
+    )
+    now = datetime(2026, 9, 15, 12, 0, tzinfo=TZ)
+    assert rank_hours(tt, "month", now) == pytest.approx(200 / 60)
+    assert rank_hours(tt, "week", now) == pytest.approx(100 / 60)
+
+
+def test_global_makeup_weekday_map():
+    from datetime import date
+
+    from schedule_lite_core.holiday import HolidayCalendar
+    from schedule_lite_core.model import Course
+
+    calendar = HolidayCalendar(
+        year=2026,
+        days={"2026-10-10": {"name": "国庆节后补班", "off": False}},
+        makeup_weekdays={"2026-10-10": 4},
+    )
+    tt = Timetable(
+        owner_id="u1",
+        term_start="2026-09-07",
+        total_weeks=20,
+        timezone="Asia/Shanghai",
+        courses=[
+            Course(name="大学英语", day=4, weeks=[5], start="10:00", end="11:40")
+        ],
+    )
+    text = format_day(tt, date(2026, 10, 10), holiday=calendar)
+    assert "按周四课表" in text
+    assert "大学英语" in text
+
+    tt.makeup_days["2026-10-10"] = 5
+    personal = format_day(tt, date(2026, 10, 10), holiday=calendar)
+    assert "按周五课表" in personal

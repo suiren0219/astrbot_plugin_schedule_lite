@@ -224,8 +224,16 @@ class Timetable:
                 return item
         return None
 
-    def makeup_weekday(self, day: date) -> int:
-        return int(self.makeup_days.get(day.isoformat()) or day.isoweekday())
+    def makeup_weekday(self, day: date, global_map: dict[str, int] | None = None) -> int:
+        key = day.isoformat()
+        value = self.makeup_days.get(key)
+        if value:
+            return int(value)
+        if global_map:
+            value = global_map.get(key)
+            if value:
+                return int(value)
+        return day.isoweekday()
 
     def adjustments_from(self, day: date) -> list[dict[str, Any]]:
         key = day.isoformat()

@@ -13,6 +13,7 @@
     records: [],
     editingKey: "",
     courses: [],
+    adjustments: [],
     settings: {},
     holidayYear: new Date().getFullYear(),
     themeMode: "auto",
@@ -83,6 +84,26 @@
     applyTheme(next);
   }
 
+  let confirmResolver = null;
+
+  function askConfirm(message, title = "确认操作", okText = "确定") {
+    $("#confirm-title").textContent = title;
+    $("#confirm-text").textContent = message;
+    $("#confirm-ok").textContent = okText;
+    $("#confirm-mask").hidden = false;
+    return new Promise((resolve) => {
+      confirmResolver = resolve;
+    });
+  }
+
+  function resolveConfirm(value) {
+    $("#confirm-mask").hidden = true;
+    if (confirmResolver) {
+      confirmResolver(value);
+      confirmResolver = null;
+    }
+  }
+
   async function ready() {
     if (bridge) {
       try {
@@ -148,6 +169,16 @@
       { name: "模拟电子技术A", day: 2, weeks: "1-16", start: "", end: "", start_section: 3, end_section: 4 },
       { name: "线性代数", day: 4, weeks: "1-16", start: "14:40", end: "16:15" },
     ],
+    leaves: [{ start: "2026-10-26", end: "2026-10-26", reason: "病假" }],
+    adjustments: [
+      {
+        from_date: "2026-10-20", to_date: "2026-10-21", course: "",
+        courses: [{ name: "线性代数", start: "14:40", end: "16:15" }],
+      },
+    ],
+    makeup_days: { "2026-10-10": 4 },
+    groups: ["100000"],
+    group_origins: { "100000": "test:group:100000" },
   };
 
   function demo(path, body) {
@@ -180,6 +211,7 @@
         showcase_enabled: true, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
         recap_enabled: true, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
         holiday_enabled: true, holiday_api_url: "https://timor.tech/api/holiday/year/{year}", holiday_cache_hours: 24,
+        makeup_weekday_map: "2026-10-10 周四",
       };
     }
     if (path === "holidays") {
@@ -332,6 +364,152 @@
     });
   }
 
+  function leaveRow(item = {}) {
+    return `
+      <div class="record-row leave-row">
+        <label>开始<input class="input" type="date" data-field="start" value="${esc(item.start || "")}"></label>
+        <label>结束<input class="input" type="date" data-field="end" value="${esc(item.end || item.start || "")}"></label>
+        <label class="grow">原因<input class="input" data-field="reason" value="${esc(item.reason || "")}" placeholder="病假（可空）"></label>
+        <button class="icon-btn remove" title="移除">✕</button>
+      </div>`;
+  }
+
+  function existingAdjustmentRow(item, index) {
+    const names = (item.courses || []).map((course) => course.name).filter(Boolean).join("、");
+    return `
+      <div class="record-row adjust-row">
+        <div class="record-main">
+          <b>${esc(item.from_date)} → ${esc(item.to_date)}</b>
+          <small>${esc(item.course || "全部课程")}${names ? " · " + esc(names) : ""}</small>
+        </div>
+        <button class="icon-btn remove" data-remove="${index}" title="移除">✕</button>
+      </div>`;
+  }
+
+  function newAdjustmentRow(item = {}) {
+    return `
+      <div class="record-row adjust-row new">
+        <label>原日期<input class="input" type="date" data-field="from_date" value="${esc(item.from_date || "")}"></label>
+        <label>目标日期<input class="input" type="date" data-field="to_date" value="${esc(item.to_date || "")}"></label>
+        <label>课程<input class="input" data-field="course" value="${esc(item.course || "")}" placeholder="留空=当天全部"></label>
+        <label class="inline-check"><input type="checkbox" data-field="swap" ${item.swap ? "checked" : ""}>互换</label>
+        <button class="icon-btn remove" title="移除">✕</button>
+      </div>`;
+  }
+
+  function makeupRow(day = "", weekday = 1) {
+    const options = [1, 2, 3, 4, 5, 6, 7]
+      .map((value) => `<option value="${value}" ${Number(weekday) === value ? "selected" : ""}>周${"一二三四五六日"[value - 1]}</option>`)
+      .join("");
+    return `
+      <div class="record-row makeup-row">
+        <label>补班日期<input class="input" type="date" data-field="date" value="${esc(day)}"></label>
+        <label>按周几<select class="input" data-field="weekday">${options}</select></label>
+        <button class="icon-btn remove" title="移除">✕</button>
+      </div>`;
+  }
+
+  function groupRow(group = "", origin = "") {
+    return `
+      <div class="record-row group-row">
+        <label>群号<input class="input" data-field="group" value="${esc(group)}" placeholder="123456"></label>
+        <label class="grow">会话 origin<input class="input" data-field="origin" value="${esc(origin)}" placeholder="aiocqhttp:GroupMessage:123456"></label>
+        <button class="icon-btn remove" title="移除">✕</button>
+      </div>`;
+  }
+
+  function bindRecordRemoval(selector) {
+    document.querySelectorAll(`${selector} .remove`).forEach((btn) => {
+      btn.addEventListener("click", () => {
+        btn.closest(".record-row").remove();
+      });
+    });
+  }
+
+  function renderLeaves(items = []) {
+    const wrap = $("#leave-editor");
+    wrap.innerHTML = items.length ? items.map(leaveRow).join("") : "";
+    bindRecordRemoval("#leave-editor");
+  }
+
+  function renderAdjustments(items = []) {
+    const wrap = $("#adjust-existing");
+    wrap.innerHTML = items.length ? items.map(existingAdjustmentRow).join("") : "";
+    wrap.querySelectorAll("[data-remove]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        state.adjustments.splice(Number(btn.dataset.remove), 1);
+        renderAdjustments(state.adjustments);
+      });
+    });
+  }
+
+  function renderMakeup(days = {}) {
+    const entries = Object.entries(days).sort(([a], [b]) => a.localeCompare(b));
+    const wrap = $("#makeup-editor");
+    wrap.innerHTML = entries.length
+      ? entries.map(([day, weekday]) => makeupRow(day, weekday)).join("")
+      : "";
+    bindRecordRemoval("#makeup-editor");
+  }
+
+  function renderGroups(groups = [], origins = {}) {
+    const wrap = $("#group-editor");
+    wrap.innerHTML = groups.length
+      ? groups.map((group) => groupRow(group, origins[group] || "")).join("")
+      : "";
+    bindRecordRemoval("#group-editor");
+  }
+
+  function readLeaves() {
+    return [...document.querySelectorAll("#leave-editor .leave-row")]
+      .map((row) => {
+        const value = (field) => row.querySelector(`[data-field="${field}"]`)?.value.trim() || "";
+        return { start: value("start"), end: value("end") || value("start"), reason: value("reason") };
+      })
+      .filter((item) => item.start);
+  }
+
+  function readNewAdjustments() {
+    const rows = [];
+    for (const row of document.querySelectorAll("#adjust-new .adjust-row")) {
+      const value = (field) => row.querySelector(`[data-field="${field}"]`)?.value.trim() || "";
+      const from = value("from_date");
+      const to = value("to_date");
+      if (!from && !to) continue;
+      if (!from || !to) throw new Error("新增调课需要同时填写原日期和目标日期");
+      rows.push({
+        from_date: from,
+        to_date: to,
+        course: value("course"),
+        swap: Boolean(row.querySelector('[data-field="swap"]')?.checked),
+      });
+    }
+    return rows;
+  }
+
+  function readMakeupDays() {
+    const days = {};
+    document.querySelectorAll("#makeup-editor .makeup-row").forEach((row) => {
+      const day = row.querySelector('[data-field="date"]')?.value.trim();
+      if (!day) return;
+      days[day] = Number(row.querySelector('[data-field="weekday"]')?.value || 1);
+    });
+    return days;
+  }
+
+  function readGroups() {
+    const groups = [];
+    const origins = {};
+    document.querySelectorAll("#group-editor .group-row").forEach((row) => {
+      const group = row.querySelector('[data-field="group"]')?.value.trim();
+      if (!group) return;
+      if (!groups.includes(group)) groups.push(group);
+      const origin = row.querySelector('[data-field="origin"]')?.value.trim();
+      if (origin) origins[group] = origin;
+    });
+    return { groups, origins };
+  }
+
   async function openEditor(key = "") {
     try {
       const data = key ? await apiGet("timetable", { key }) : blankRecord();
@@ -346,7 +524,16 @@
       $("#f-weeks").value = data.total_weeks || 20;
       $("#f-tz").value = data.timezone || "Asia/Shanghai";
       state.courses = Array.isArray(data.courses) ? data.courses.slice() : [];
+      state.adjustments = Array.isArray(data.adjustments) ? data.adjustments.slice() : [];
       renderCourses();
+      renderLeaves(Array.isArray(data.leaves) ? data.leaves : []);
+      renderAdjustments(state.adjustments);
+      $("#adjust-new").innerHTML = "";
+      renderMakeup((data.makeup_days && typeof data.makeup_days === "object") ? data.makeup_days : {});
+      renderGroups(
+        Array.isArray(data.groups) ? data.groups : [],
+        (data.group_origins && typeof data.group_origins === "object") ? data.group_origins : {},
+      );
       $("#delete-record").style.visibility = key ? "visible" : "hidden";
       $("#editor-mask").hidden = false;
     } catch (err) {
@@ -388,6 +575,13 @@
     if (incomplete) {
       return toast(`「${incomplete.name}」缺少上课时间或节次`);
     }
+    let newAdjustments;
+    try {
+      newAdjustments = readNewAdjustments();
+    } catch (err) {
+      return toast(err.message);
+    }
+    const groupBinding = readGroups();
     const payload = {
       key: state.editingKey,
       platform: $("#f-platform").value.trim() || "aiocqhttp",
@@ -399,6 +593,12 @@
       timezone: $("#f-tz").value.trim() || "Asia/Shanghai",
       source: "控制面板",
       courses,
+      leaves: readLeaves(),
+      adjustments: state.adjustments,
+      new_adjustments: newAdjustments,
+      makeup_days: readMakeupDays(),
+      groups: groupBinding.groups,
+      group_origins: groupBinding.origins,
     };
     if (!payload.owner_id) return toast("请填写用户 ID");
     if (!payload.term_start) return toast("请填写开学日期");
@@ -414,7 +614,11 @@
 
   async function deleteRecord(key) {
     if (!key) return;
-    if (!window.confirm(`确定删除 ${key} 的课表吗？此操作不可撤销。`)) return;
+    const ok = await askConfirm(
+      `确定删除 ${key} 的课表吗？请假、调课和群绑定也会一起删除，此操作不可撤销。`,
+      "删除课表",
+    );
+    if (!ok) return;
     try {
       await apiPost("timetable/delete", { key });
       toast("已删除");
@@ -488,6 +692,7 @@
       set("#set-holiday-enabled", "holiday_enabled");
       set("#set-holiday-url", "holiday_api_url");
       set("#set-holiday-hours", "holiday_cache_hours");
+      set("#set-makeup-map", "makeup_weekday_map");
     } catch (err) {
       toast(`设置读取失败：${err.message}`);
     }
@@ -517,6 +722,7 @@
       holiday_enabled: $("#set-holiday-enabled").checked,
       holiday_api_url: $("#set-holiday-url").value.trim(),
       holiday_cache_hours: num("#set-holiday-hours"),
+      makeup_weekday_map: $("#set-makeup-map").value,
     };
     try {
       await apiPost("settings/save", payload);
@@ -553,6 +759,29 @@
   });
   $("#save-record").addEventListener("click", saveRecord);
   $("#delete-record").addEventListener("click", () => deleteRecord(state.editingKey));
+
+  function appendRecord(selector, html) {
+    const wrap = $(selector);
+    wrap.insertAdjacentHTML("beforeend", html);
+    wrap.lastElementChild.querySelector(".remove").addEventListener("click", (event) => {
+      event.currentTarget.closest(".record-row").remove();
+    });
+  }
+
+  $("#add-leave").addEventListener("click", () => appendRecord("#leave-editor", leaveRow()));
+  $("#add-adjust").addEventListener("click", () => appendRecord("#adjust-new", newAdjustmentRow()));
+  $("#add-makeup").addEventListener("click", () => appendRecord("#makeup-editor", makeupRow()));
+  $("#add-group").addEventListener("click", () => appendRecord("#group-editor", groupRow()));
+
+  $("#confirm-cancel").addEventListener("click", () => resolveConfirm(false));
+  $("#confirm-ok").addEventListener("click", () => resolveConfirm(true));
+  $("#confirm-mask").addEventListener("click", (event) => {
+    if (event.target === $("#confirm-mask")) resolveConfirm(false);
+  });
+  document.addEventListener("keydown", (event) => {
+    if (event.key === "Escape" && !$("#confirm-mask").hidden) resolveConfirm(false);
+  });
+
   $("#load-holiday").addEventListener("click", () => {
     state.holidayYear = Number($("#holiday-year").value || state.holidayYear);
     loadHoliday();

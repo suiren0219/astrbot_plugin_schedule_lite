@@ -168,6 +168,16 @@
       "step": 1
     }
   },
+  "makeup_weekday_map": {
+    "description": "🗓️ 全局补班映射",
+    "type": "text",
+    "default": "",
+    "hint": "每行「日期 周几」，例如 2026-10-10 周四。国务院数据只标补班日，不标按周几上课；这里设置后全群生效，个人 /课表 调休 优先。",
+    "editor_mode": true,
+    "editor_language": "plaintext",
+    "editor_theme": "vs-light",
+    "full_width": true
+  },
   "showcase_enabled": {
     "description": "🌙 启用今日满课榜",
     "type": "bool",
