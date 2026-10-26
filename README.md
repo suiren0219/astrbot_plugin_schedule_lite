@@ -273,6 +273,10 @@ python -m pytest tests -q
 查询/状态/排行、存储读写，以及用最小 AstrBot 桩件跑的命令处理流程。
 GitHub Actions 会在 Python 3.10 / 3.12 上自动跑同一套测试。
 
+## 更新日志
+
+见 [CHANGELOG.md](CHANGELOG.md)。
+
 ## 许可
 
 MIT License，见 [LICENSE](LICENSE)。
