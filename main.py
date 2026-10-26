@@ -183,7 +183,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.4.4",
+    "v1.4.5",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -625,23 +625,32 @@ class ScheduleLitePlugin(Star):
     async def cmd_schedule(self, event):
         async for result in self._dispatch(event):
             yield result
+        event.stop_event()  # 防止后续兜底 handler 再次执行
 
     @filter.command("课表导入")
     async def cmd_schedule_import(self, event):
         async for result in self._dispatch(event):
             yield result
+        event.stop_event()
 
     @filter.command("课表排行")
     async def cmd_schedule_rank(self, event):
         async for result in self._dispatch(event):
             yield result
+        event.stop_event()
 
     @filter.event_message_type(filter.EventMessageType.ALL)
     async def cmd_glued(self, event):
         """兼容“课表明天”“课表导入https://…”“课表排行本周”这类无空格写法。"""
         if event.get_extra("parsed_params") is not None:
             return  # 正式命令已经处理
-        text = (event.message_str or "").strip().lstrip("/").strip()
+        text = re.sub(r"\s+", " ", (event.message_str or "").strip().lstrip("/").strip())
+        # 与 CommandFilter 相同的边界规则：命中本插件注册的指令时交给命令处理器
+        if any(
+            text == name or text.startswith(name + " ")
+            for name in ("课表", "课表导入", "课表排行")
+        ):
+            return
         if not text.startswith("课表") or len(text) <= 2:
             return
         raw_rest = text[2:]
