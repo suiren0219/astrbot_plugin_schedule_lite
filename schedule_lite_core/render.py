@@ -116,6 +116,33 @@ def _cleanup(out_dir: Path, pattern: str, keep: int = 60) -> None:
             pass
 
 
+def _prune_day_dirs(out_dir: Path, current: str, keep: int = 3) -> None:
+    """状态卡片缓存按天分目录，只保留最近几天，避免缓存目录无限增长。"""
+    try:
+        day_dirs = sorted(
+            (
+                d
+                for d in out_dir.iterdir()
+                if d.is_dir() and d.name.isdigit() and len(d.name) == 8
+            ),
+            key=lambda d: d.name,
+        )
+        for stale in day_dirs:
+            if stale.name == current or len(day_dirs) - day_dirs.index(stale) <= keep:
+                continue
+            for f in stale.iterdir():
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+            try:
+                stale.rmdir()
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
 # ---------------------------------------------------------------- Markdown
 
 
@@ -612,7 +639,10 @@ def render_everyone(
         ]
     regular, bold = _font_pair(font_path)
     out = Path(out_dir)
-    out.mkdir(parents=True, exist_ok=True)
+    # 缓存按天分目录：当天查询只看当天这一类，旧目录自动清理
+    day_dir = out / time.strftime("%Y%m%d")
+    day_dir.mkdir(parents=True, exist_ok=True)
+    _prune_day_dirs(out, day_dir.name, keep=3)
 
     page_size = max(1, min(int(page_size or 8), 20))
     chunks = [list(entries[i : i + page_size]) for i in range(0, len(entries), page_size)]
@@ -699,9 +729,8 @@ def render_everyone(
                 fill="#94A3B8",
             )
 
-        path = out / f"everyone-{stamp}-{page_no}.png"
+        path = day_dir / f"everyone-{stamp}-{page_no}.png"
         image.resize((width, height), Image.LANCZOS).save(path, "PNG", optimize=True)
         paths.append(path)
 
-    _cleanup(out, "everyone-*.png", keep=60)
     return paths

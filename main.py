@@ -185,7 +185,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.0",
+    "v1.5.1",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -210,6 +210,9 @@ class ScheduleLitePlugin(Star):
         self._day_cache: dict[tuple[int, str, int], list] = {}
         self._status_cache: dict[tuple[int, str, int, bool], dict] = {}
         self._entries_cache: dict[tuple, list[dict]] = {}
+        # 按天分桶：换日即预构建当天快照；群成员与群 origin 走索引缓存
+        self._group_index: dict[str, list[Timetable]] = {}
+        self._origins_cache: dict[str, str] | None = None
 
     # ---------------------------------------------------------- 生命周期
 
@@ -659,6 +662,8 @@ class ScheduleLitePlugin(Star):
         self._day_cache.clear()
         self._status_cache.clear()
         self._entries_cache.clear()
+        self._group_index.clear()
+        self._origins_cache = None
 
     # ---------------------------------------------------------- 命令入口
 
@@ -941,7 +946,7 @@ class ScheduleLitePlugin(Star):
 
         if tt and self._touch(event, tt):
             await self._save()
-        visible = timetables_of_group(self.store.all().values(), group_id)
+        visible = self._group_timetables(group_id)
         # 自己刚在本群用过指令，即使没记录过群号也要算进来
         if tt and tt not in visible:
             visible.append(tt)
@@ -1002,7 +1007,7 @@ class ScheduleLitePlugin(Star):
             elif token in RANK_MODES:
                 mode = RANK_MODES[token]
 
-        visible = timetables_of_group(self.store.all().values(), group_id)
+        visible = self._group_timetables(group_id)
         if tt and tt not in visible:
             visible.append(tt)
         if not visible:
@@ -1563,7 +1568,10 @@ class ScheduleLitePlugin(Star):
             return []
 
     async def _send_image_pages(self, event, paths, *, title: str = "课表 Lite") -> bool:
-        """优先发合并转发（一个节点一张图），平台不支持时退回逐张发送。"""
+        """优先发合并转发（一个节点一张图），平台不支持时退回逐张发送。
+
+        只有一张图时直接发送，不再套合并转发。
+        """
         if not paths:
             return False
         try:
@@ -1574,6 +1582,13 @@ class ScheduleLitePlugin(Star):
         except ImportError:
             logger.warning(f"[{PLUGIN_NAME}] 当前 AstrBot 版本没有合并转发组件")
             return False
+
+        if len(paths) == 1:
+            try:
+                await event.send(MessageChain([Image.fromFileSystem(str(paths[0]))]))
+                return True
+            except Exception as e:  # noqa: BLE001
+                logger.info(f"[{PLUGIN_NAME}] 单图直发失败，改走合并转发: {e}")
 
         try:
             uin = str(event.get_self_id() or "0")
@@ -1648,13 +1663,33 @@ class ScheduleLitePlugin(Star):
                 return hour, minute
         return (0, 0)
 
+    def _group_timetables(self, group_id: str) -> list[Timetable]:
+        """群成员索引：写盘即失效，避免每次查询都扫描全量用户。"""
+        cached = self._group_index.get(group_id)
+        if cached is None:
+            cached = list(timetables_of_group(self.store.all().values(), group_id))
+            self._group_index[group_id] = cached
+        return list(cached)
+
     def _group_origins(self) -> dict[str, str]:
+        if self._origins_cache is not None:
+            return self._origins_cache
         origins: dict[str, str] = {}
         for tt in self.store.all().values():
             for group_id, origin in tt.group_origins.items():
                 if origin and group_id not in origins:
                     origins[group_id] = origin
+        self._origins_cache = origins
         return origins
+
+    def _warm_day_bucket(self, day: date) -> None:
+        """换日即预构建当天的课程快照，白天首个查询不用现场扫描全量数据。"""
+        holiday = self._calendar_for(day)
+        for tt in self.store.all().values():
+            try:
+                self._day_entries_cached(tt, day, holiday)
+            except Exception:  # noqa: BLE001
+                logger.debug(f"[{PLUGIN_NAME}] 预热 {tt.owner_id} 当天快照失败", exc_info=True)
 
     def _period_hours(self, tt: Timetable, mode: str, today: date) -> float:
         calendar = self._calendar_for(today)
@@ -1759,7 +1794,6 @@ class ScheduleLitePlugin(Star):
         origins = self._group_origins()
         if not origins:
             return
-        all_tt = self.store.all()
 
         if early_enabled:
             hour, minute = self._hhmm(
@@ -1778,7 +1812,7 @@ class ScheduleLitePlugin(Star):
                 for group_id, origin in origins.items():
                     if tomorrow_off:
                         continue
-                    visible = timetables_of_group(all_tt.values(), group_id)
+                    visible = self._group_timetables(group_id)
                     rows = []
                     for tt in visible:
                         if tt.leave_on(tomorrow):
@@ -1839,7 +1873,7 @@ class ScheduleLitePlugin(Star):
                     min_users = 2
                 calendar = self._calendar_for(today)
                 for group_id, origin in origins.items():
-                    visible = timetables_of_group(all_tt.values(), group_id)
+                    visible = self._group_timetables(group_id)
                     ranked = []
                     for tt in visible:
                         if tt.leave_on(today):
@@ -1908,7 +1942,7 @@ class ScheduleLitePlugin(Star):
                 except (TypeError, ValueError):
                     top_n = 5
                 for group_id, origin in origins.items():
-                    visible = timetables_of_group(all_tt.values(), group_id)
+                    visible = self._group_timetables(group_id)
                     ranked = []
                     for tt in visible:
                         hours = self._period_hours(tt, mode, today)
@@ -2931,7 +2965,7 @@ class ScheduleLitePlugin(Star):
             group_id = self._query("group").strip()
             now = self._now()
             timetables = (
-                timetables_of_group(self.store.all().values(), group_id)
+                self._group_timetables(group_id)
                 if group_id
                 else list(self.store.all().values())
             )
@@ -2948,8 +2982,14 @@ class ScheduleLitePlugin(Star):
     # ---------------------------------------------------------- 提醒循环
 
     async def _notify_loop(self):
+        last_day = ""
         while True:
             try:
+                now = self._now()
+                day_key = now.date().isoformat()
+                if day_key != last_day:
+                    last_day = day_key
+                    self._warm_day_bucket(now.date())
                 if self._cfg("notify_enabled", True):
                     await self._check_notifications()
                 await self._check_scheduled_broadcasts(self._now())

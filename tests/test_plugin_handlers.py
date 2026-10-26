@@ -417,9 +417,14 @@ def test_everyone_sends_image(image_plugin, tmp_path):
     out = asyncio.run(_collect(image_plugin._h_everyone(event)))
     assert out == []
     assert event.sent
-    nodes = event.sent[0].chain[0]
-    assert nodes.nodes
-    assert list((tmp_path / "cache" / "everyone").glob("everyone-*.png"))
+    first = event.sent[0].chain[0]
+    # 单张图直接发，不再套合并转发
+    if hasattr(first, "nodes"):
+        assert first.nodes
+    else:
+        assert Path(str(getattr(first, "file", ""))).exists()
+    day_dirs = list((tmp_path / "cache" / "everyone").glob("*/everyone-*.png"))
+    assert day_dirs
 
 
 def test_scrub_privacy_clears_historical_data(plugin):
@@ -1263,3 +1268,82 @@ def test_early_push_tomorrow_early_birds(tmp_path):
 
     asyncio.run(plugin._check_scheduled_broadcasts(now21))
     assert len(ctx.sent) == 1
+
+
+def test_group_index_cached_and_invalidated(plugin):
+    event = _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    first = plugin._group_timetables("g1")
+    assert [tt.owner_id for tt in first] == ["10001"]
+    assert "g1" in plugin._group_index
+
+    # 新增用户后写盘，索引失效并重建
+    second_event = _Event("/课表 导入", uid="10002", nick="李四", group="g1")
+    asyncio.run(_collect(plugin._h_import(second_event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    assert plugin._group_index == {}
+    visible = plugin._group_timetables("g1")
+    assert {tt.owner_id for tt in visible} == {"10001", "10002"}
+
+
+def test_warm_day_bucket_prefills_cache(plugin):
+    event = _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    tt = plugin.store.get("test:10001")
+    today = plugin._now().date()
+    assert plugin._day_cache == {}
+    plugin._warm_day_bucket(today)
+    assert len(plugin._day_cache) == 1
+    entries = plugin._day_entries_cached(tt, today, None)
+    assert entries == plugin._day_cache[(id(tt), today.isoformat(), id(None))]
+
+
+def test_single_image_sent_directly(image_plugin):
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    event = _Event(group="g1")
+    asyncio.run(_collect(image_plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    asyncio.run(_collect(image_plugin._h_everyone(event)))
+    assert event.sent
+    first = event.sent[0].chain[0]
+    assert not hasattr(first, "nodes"), "单张图片不应套合并转发"
+
+
+def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    cache = tmp_path / "cache" / "everyone"
+    for stale in ("20250101", "20250102", "20250103", "20250104"):
+        day_dir = cache / stale
+        day_dir.mkdir(parents=True)
+        (day_dir / "everyone-x.png").write_bytes(b"png")
+
+    from schedule_lite_core.model import Course, Timetable
+
+    tt = Timetable(
+        owner_id="u1",
+        owner_name="张三",
+        term_start="2026-09-07",
+        total_weeks=20,
+        courses=[Course(name="课", day=1, weeks=[1, 2, 3], start="08:00", end="08:45")],
+    )
+    now = plugin_now(image_plugin)
+    paths = render.render_everyone(
+        [{"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": ""}],
+        cache,
+        title="群友在上什么课？",
+        subtitle="",
+        footer_note="",
+        page_size=8,
+        width=900,
+        font_path="",
+    )
+    assert paths
+    assert all(p.parent.name == now for p in paths)
+    remaining = sorted(d.name for d in cache.iterdir() if d.is_dir())
+    assert "20250101" not in remaining and len(remaining) <= 3
+
+
+def plugin_now(plugin):
+    return plugin._now().strftime("%Y%m%d")
