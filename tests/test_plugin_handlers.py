@@ -179,6 +179,7 @@ class _Event:
         self.unified_msg_origin = f"test:friend:{uid}" if not group else f"test:group:{group}"
         self._group = group
         self._uid = uid
+        self.stopped = False
         self.sent = []
 
     def get_platform_id(self):
@@ -209,7 +210,7 @@ class _Event:
         return default
 
     def stop_event(self):
-        pass
+        self.stopped = True
 
     async def send(self, chain):
         self.sent.append(chain)
@@ -1092,3 +1093,41 @@ def test_bare_file_skips_command_messages(plugin):
     event.message_obj.message = [File(name="x.ics", file="/nonexistent.ics")]
     outs = asyncio.run(_collect(plugin.cmd_file_auto_import(event)))
     assert outs == []
+
+
+def test_command_handlers_stop_event(plugin):
+    event = _Event("/课表 帮助", group="g1")
+    asyncio.run(_collect(plugin.cmd_schedule(event)))
+    assert event.stopped is True
+
+    event = _Event("/课表导入", group="g1")
+    asyncio.run(_collect(plugin.cmd_schedule_import(event)))
+    assert event.stopped is True
+
+    event = _Event("/课表排行", group="g1")
+    asyncio.run(_collect(plugin.cmd_schedule_rank(event)))
+    assert event.stopped is True
+
+
+def test_glued_skips_command_claimed_messages(plugin):
+    async def glued(event):
+        return [item async for item in plugin.cmd_glued(event)]
+
+    # 斜杠/空格形式由命令处理器接管，兜底 handler 不能再跑一遍
+    event = _Event("/课表导入 " + _generic_import_payload())
+    assert asyncio.run(glued(event)) == []
+    assert plugin.store.all() == {}
+
+    event = _Event("课表 导入 " + _generic_import_payload(name="空格形式"))
+    assert asyncio.run(glued(event)) == []
+    assert plugin.store.all() == {}
+
+    event = _Event("课表导入 " + _generic_import_payload(name="带空格唤醒"))
+    assert asyncio.run(glued(event)) == []
+    assert plugin.store.all() == {}
+
+    # 无边界粘连写法仍由兜底 handler 处理，且只处理一次
+    event = _Event("课表导入" + _generic_import_payload(name="粘连形式"))
+    outs = asyncio.run(glued(event))
+    assert any("已导入课表「粘连形式」" in str(out) for out in outs)
+    assert len(plugin.store.all()) == 1
