@@ -134,6 +134,19 @@
           </div>
         </div>
         <div class="card">
+          <div class="section-head"><div><h2>明日早八推送</h2><p>前一晚推送明天有早八的同学，节假日自动跳过</p></div></div>
+          <div class="setting-grid">
+            <label class="setting"><span><b>启用早八推送</b><small>每天固定时间</small></span><input type="checkbox" id="set-early"></label>
+            <label class="setting"><span><b>推送时间</b><small>前一晚 HH:MM</small></span><input class="input short" id="set-early-time" placeholder="21:30"></label>
+            <label class="setting"><span><b>早八界限</b><small>首节课不晚于</small></span><input class="input short" id="set-early-max" placeholder="08:00"></label>
+            <label class="setting"><span><b>艾特学生</b><small>推送时逐个 @</small></span><input type="checkbox" id="set-early-at"></label>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-head"><div><h2>重要日期</h2><p>四六级、期末等倒计时，/课表 倒计时 可查，早八推送附带</p></div><button class="btn ghost" id="add-event">添加日期</button></div>
+          <div id="event-editor" class="record-list"></div>
+        </div>
+        <div class="card">
           <div class="section-head"><div><h2>节假日数据</h2><p>国务院通知整理源，失败自动回退</p></div></div>
           <div class="setting-grid">
             <label class="setting"><span><b>启用调休判断</b><small>查询时本地生效</small></span><input type="checkbox" id="set-holiday-enabled"></label>
@@ -143,6 +156,18 @@
           </div>
         </div>
         <div class="save-bar"><button class="btn primary" id="save-settings">保存设置</button></div>
+        <div class="card">
+          <div class="section-head">
+            <div><h2>数据备份</h2><p>导出全部课表与重要日期；恢复会覆盖现有数据</p></div>
+            <div class="row-actions">
+              <input type="file" id="restore-file" hidden accept=".json">
+              <button class="btn ghost" id="backup-export" type="button">导出备份</button>
+              <button class="btn ghost" id="backup-pick" type="button">选择备份文件</button>
+              <button class="btn primary" id="backup-restore" type="button" disabled>恢复备份</button>
+            </div>
+          </div>
+          <p class="muted" id="restore-hint">还没有选择备份文件。</p>
+        </div>
       </section>
     </main>
 

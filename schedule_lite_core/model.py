@@ -112,6 +112,8 @@ class Timetable:
     adjustments: list[dict[str, Any]] = field(default_factory=list)
     # 调休补班：{"2026-09-27": 1} 表示按周一课表上课
     makeup_days: dict[str, int] = field(default_factory=dict)
+    # 原始导入文件存档路径（相对插件数据目录），便于追溯与重新解析
+    raw_source: str = field(default="")
     # 运行期索引，不写入 JSON
     _day_index: dict[int, list[Course]] | None = field(
         default=None, repr=False, compare=False
@@ -167,6 +169,7 @@ class Timetable:
                 for k, v in (data.get("makeup_days") or {}).items()
                 if str(v).isdigit() and 1 <= int(v) <= 7
             },
+            raw_source=str(data.get("raw_source") or ""),
         )
 
     # ---------- 便捷方法 ----------

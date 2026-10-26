@@ -18,6 +18,7 @@
     holidayYear: new Date().getFullYear(),
     themeMode: "auto",
     bridgeDark: null,
+    restorePayload: null,
   };
 
   const esc = (value) =>
@@ -162,6 +163,7 @@
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
         holiday_enabled: true, holiday_api_url: "https://timor.tech/api/holiday/year/{year}",
         holiday_cache_hours: 24, makeup_weekday_map: "",
+        early_enabled: false, early_time: "21:30", early_max_start: "08:00", early_at: false,
       };
     }
     if (path === "holidays") {
@@ -170,6 +172,10 @@
     if (path === "timetable/save") return { ...(body || {}), key: (body && body.key) || "preview" };
     if (path === "timetable/delete") return { deleted: (body && body.key) || "" };
     if (path === "import") throw new Error("预览模式不支持导入，请连接 AstrBot 后台");
+    if (path === "backup") throw new Error("预览模式不支持备份，请连接 AstrBot 后台");
+    if (path === "restore") throw new Error("预览模式不支持恢复，请连接 AstrBot 后台");
+    if (path === "events") return { items: [] };
+    if (path === "events/save") return body || {};
     if (path === "settings/save") return body || {};
     if (path === "holidays/refresh") {
       return { year: now.getFullYear(), source: "", updated_at: "", count: 0 };
@@ -460,7 +466,9 @@
       const data = key ? await apiGet("timetable", { key }) : blankRecord();
       state.editingKey = key;
       $("#editor-title").textContent = key ? "编辑课表" : "新增课表";
-      $("#editor-key").textContent = key || "保存后生成 platform:owner_id";
+      $("#editor-key").textContent =
+        (key || "保存后生成 platform:owner_id")
+        + (data.raw_source ? ` · 源文件：${data.raw_source}` : "");
       $("#f-platform").value = key ? key.split(":")[0] : "aiocqhttp";
       $("#f-owner-id").value = data.owner_id || "";
       $("#f-owner-name").value = data.owner_name || "";
@@ -687,9 +695,45 @@
       set("#set-holiday-url", "holiday_api_url");
       set("#set-holiday-hours", "holiday_cache_hours");
       set("#set-makeup-map", "makeup_weekday_map");
+      set("#set-early", "early_enabled");
+      set("#set-early-time", "early_time");
+      set("#set-early-max", "early_max_start");
+      set("#set-early-at", "early_at");
+      try {
+        const events = await apiGet("events");
+        renderEvents((events && events.items) || []);
+      } catch (err) {
+        renderEvents([]);
+      }
     } catch (err) {
       toast(`设置读取失败：${err.message}`);
     }
+  }
+
+  function eventRow(item = {}) {
+    return `
+      <div class="record-row event-row">
+        <label class="grow">名称<input class="input" data-field="name" value="${esc(item.name || "")}" placeholder="CET-6 / 期末考试"></label>
+        <label>日期<input class="input" type="date" data-field="date" value="${esc(item.date || "")}"></label>
+        <button class="icon-btn remove" title="移除">✕</button>
+      </div>`;
+  }
+
+  function renderEvents(items = []) {
+    const wrap = $("#event-editor");
+    wrap.innerHTML = items.length ? items.map(eventRow).join("") : "";
+    bindRecordRemoval("#event-editor");
+  }
+
+  function readEvents() {
+    const items = [];
+    for (const row of document.querySelectorAll("#event-editor .event-row")) {
+      const name = row.querySelector('[data-field="name"]')?.value.trim() || "";
+      const day = row.querySelector('[data-field="date"]')?.value.trim() || "";
+      if (!name || !day) continue;
+      items.push({ name, date: day });
+    }
+    return items;
   }
 
   async function saveSettings() {
@@ -717,13 +761,83 @@
       holiday_api_url: $("#set-holiday-url").value.trim(),
       holiday_cache_hours: num("#set-holiday-hours"),
       makeup_weekday_map: $("#set-makeup-map").value,
+      early_enabled: $("#set-early").checked,
+      early_time: $("#set-early-time").value.trim(),
+      early_max_start: $("#set-early-max").value.trim(),
+      early_at: $("#set-early-at").checked,
     };
     try {
       await apiPost("settings/save", payload);
+      try {
+        await apiPost("events/save", { items: readEvents() });
+      } catch (err) {
+        toast(`重要日期保存失败：${err.message}`);
+      }
       toast("设置已保存");
       loadOverview();
     } catch (err) {
       toast(`保存失败：${err.message}`);
+    }
+  }
+
+  async function exportBackup() {
+    try {
+      const data = await apiGet("backup");
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `schedule-lite-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast("备份已导出");
+    } catch (err) {
+      toast(`备份导出失败：${err.message}`);
+    }
+  }
+
+  async function onRestoreFile(event) {
+    const input = event.target;
+    const file = input.files && input.files[0];
+    input.value = "";
+    if (!file) return;
+    try {
+      const parsed = JSON.parse(await file.text());
+      if (!parsed || typeof parsed !== "object" || !parsed.users) {
+        throw new Error("不是本插件的备份文件");
+      }
+      state.restorePayload = parsed;
+      const count = Object.keys(parsed.users).length;
+      $("#restore-hint").textContent = `已读取 ${file.name}：${count} 份课表、${(parsed.events || []).length} 个重要日期。`;
+      $("#backup-restore").disabled = false;
+    } catch (err) {
+      state.restorePayload = null;
+      $("#backup-restore").disabled = true;
+      $("#restore-hint").textContent = "还没有选择备份文件。";
+      toast(`读取备份失败：${err.message}`);
+    }
+  }
+
+  async function restoreBackup() {
+    const payload = state.restorePayload;
+    if (!payload) return;
+    const ok = await askConfirm(
+      "恢复备份会覆盖当前全部课表和重要日期，确定继续吗？",
+      "恢复备份",
+    );
+    if (!ok) return;
+    try {
+      const data = await apiPost("restore", payload);
+      toast(`已恢复 ${data.restored} 份课表`);
+      state.restorePayload = null;
+      $("#backup-restore").disabled = true;
+      $("#restore-hint").textContent = "还没有选择备份文件。";
+      loadRecords();
+      loadOverview();
+    } catch (err) {
+      toast(`恢复失败：${err.message}`);
     }
   }
 
@@ -769,6 +883,12 @@
   $("#add-adjust").addEventListener("click", () => appendRecord("#adjust-new", newAdjustmentRow()));
   $("#add-makeup").addEventListener("click", () => appendRecord("#makeup-editor", makeupRow()));
   $("#add-group").addEventListener("click", () => appendRecord("#group-editor", groupRow()));
+  $("#add-event").addEventListener("click", () => appendRecord("#event-editor", eventRow()));
+
+  $("#backup-export").addEventListener("click", exportBackup);
+  $("#backup-pick").addEventListener("click", () => $("#restore-file").click());
+  $("#restore-file").addEventListener("change", onRestoreFile);
+  $("#backup-restore").addEventListener("click", restoreBackup);
 
   $("#confirm-cancel").addEventListener("click", () => resolveConfirm(false));
   $("#confirm-ok").addEventListener("click", () => resolveConfirm(true));
