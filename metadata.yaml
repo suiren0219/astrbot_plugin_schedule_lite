@@ -2,7 +2,7 @@ name: astrbot_plugin_schedule_lite
 display_name: 课表 Lite
 short_desc: 多来源导入课表、群友状态、请假调课、节假日调休与 WebUI 控制台
 desc: BLBot 式课表功能的独立实现。支持 Nexio 分享口令/JSON/ICS、小爱课程表分享链接、WakeUp 课程表口令/备份、iCalendar(.ics)、拾光课程表 JSON 以及通用 JSON/CSV 导入；导入时统一归一化周次（支持单双周、分段、节次）、自动补全作息、合并重复安排并提示异常数据。提供课表查询、群友在上什么课（图片卡片，按翘课/请假优先排序，人多自动隐藏无课并分页）、课程时长榜、上课提醒、请假/销假、按日期调课、国务院节假日与补班、晚间满课榜和周五累计榜，以及支持深色模式、可管理课表/请假/调课/补班/群绑定的 WebUI 控制台和合并转发图片版使用手册。
-version: v1.4.0
+version: v1.4.1
 astrbot_version: ">=4.0.0"
 author: suiren0219
 repo: https://github.com/suiren0219/astrbot_plugin_schedule_lite

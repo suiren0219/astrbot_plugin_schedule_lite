@@ -123,7 +123,7 @@
       }
     }
     applyTheme(readThemeMode());
-    $("#conn-text").textContent = "预览模式";
+    $("#conn-text").textContent = "预览模式 · 无数据";
     $("#conn-dot").classList.add("off");
   }
 
@@ -138,97 +138,41 @@
 
   /* ---------------------------------------------------------------- demo */
 
-  const demoRecords = [
-    {
-      key: "aiocqhttp:10001", owner_id: "10001", owner_name: "张三", name: "默认课表",
-      term_start: "2026-09-07", total_weeks: 20, timezone: "Asia/Shanghai",
-      course_count: 12, groups: ["100000"], notify_enabled: true,
-      leave_count: 1, adjustment_count: 0, makeup_count: 0,
-    },
-    {
-      key: "aiocqhttp:10002", owner_id: "10002", owner_name: "李四", name: "示例班级",
-      term_start: "2026-09-07", total_weeks: 18, timezone: "Asia/Shanghai",
-      course_count: 9, groups: ["100000"], notify_enabled: false,
-      leave_count: 0, adjustment_count: 2, makeup_count: 1,
-    },
-  ];
-  const demoDetail = {
-    key: "aiocqhttp:10001",
-    owner_id: "10001", owner_name: "张三", name: "默认课表",
-    term_start: "2026-09-07", total_weeks: 20, timezone: "Asia/Shanghai",
-    sections: [
-      { index: 1, start: "08:30", end: "09:15" },
-      { index: 2, start: "09:20", end: "10:05" },
-      { index: 3, start: "10:25", end: "11:10" },
-      { index: 4, start: "11:15", end: "12:00" },
-      { index: 5, start: "14:40", end: "15:25" },
-      { index: 6, start: "15:30", end: "16:15" },
-    ],
-    courses: [
-      { name: "大学物理实验", day: 1, weeks: "10", start: "", end: "", start_section: 1, end_section: 2 },
-      { name: "模拟电子技术A", day: 2, weeks: "1-16", start: "", end: "", start_section: 3, end_section: 4 },
-      { name: "线性代数", day: 4, weeks: "1-16", start: "14:40", end: "16:15" },
-    ],
-    leaves: [{ start: "2026-10-26", end: "2026-10-26", reason: "病假" }],
-    adjustments: [
-      {
-        from_date: "2026-10-20", to_date: "2026-10-21", course: "",
-        courses: [{ name: "线性代数", start: "14:40", end: "16:15" }],
-      },
-    ],
-    makeup_days: { "2026-10-10": 4 },
-    groups: ["100000"],
-    group_origins: { "100000": "test:group:100000" },
-  };
-
   function demo(path, body) {
+    const now = new Date();
+    const pad = (n) => String(n).padStart(2, "0");
+    const today = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+    const weekday = `周${"日一二三四五六"[now.getDay()]}`;
     if (path === "overview") {
       return {
-        users: 2, courses: 21, groups: 1, today: "2026-10-26", weekday: "周一",
-        status_counts: { "进行中": 1, "请假中": 1, "下一节": 1, "无课程": 2 },
-        holiday: { name: "", off: false, workday: false, source: "timor.tech" },
+        users: 0, courses: 0, groups: 0, today, weekday,
+        status_counts: {},
+        holiday: { name: "", off: false, workday: false, source: "" },
         config: { store_teacher: false, store_location: false, everyone_image: true, help_image: true },
       };
     }
-    if (path === "live") {
-      return { items: [
-        { name: "张三", type: 1, label: "进行中", main: "大学物理实验", sub: "08:30-10:05（剩余 35分钟）" },
-        { name: "李四", type: 6, label: "请假中", main: "今日请假", sub: "病假" },
-        { name: "王五", type: 3, label: "下一节", main: "线性代数", sub: "14:40-16:15（3小时50分后）" },
-        { name: "赵六", type: 5, label: "无课程", main: "今日无课程", sub: "" },
-      ]};
-    }
-    if (path === "timetables") {
-      const q = String((body && body.q) || "").toLowerCase();
-      const items = q ? demoRecords.filter((r) => `${r.owner_name}${r.key}`.toLowerCase().includes(q)) : demoRecords;
-      return { items, total: items.length };
-    }
-    if (path === "timetable") return { ...demoDetail, key: (body && body.key) || demoDetail.key };
+    if (path === "live") return { items: [], total: 0 };
+    if (path === "timetables") return { items: [], total: 0 };
+    if (path === "timetable") return { ...blankRecord(), key: (body && body.key) || "" };
     if (path === "settings") {
       return {
         store_teacher: false, store_location: false, everyone_image: true, help_image: true,
         everyone_page_size: 8, everyone_hide_idle_over: 12,
-        showcase_enabled: true, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
-        recap_enabled: true, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
-        holiday_enabled: true, holiday_api_url: "https://timor.tech/api/holiday/year/{year}", holiday_cache_hours: 24,
-        makeup_weekday_map: "2026-10-10 周四",
+        showcase_enabled: false, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
+        recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
+        holiday_enabled: true, holiday_api_url: "https://timor.tech/api/holiday/year/{year}",
+        holiday_cache_hours: 24, makeup_weekday_map: "",
       };
     }
     if (path === "holidays") {
-      return {
-        year: 2026, source: "timor.tech", updated_at: "2026-10-26T08:00:00+08:00",
-        days: [
-          { date: "2026-01-01", name: "元旦", off: true },
-          { date: "2026-01-04", name: "元旦后补班", off: false },
-          { date: "2026-10-01", name: "国庆节", off: true },
-          { date: "2026-10-10", name: "国庆节后补班", off: false },
-        ],
-      };
+      return { year: now.getFullYear(), source: "", updated_at: "", days: [] };
     }
-    if (path === "timetable/save") return { ...demoDetail, key: body.key || demoDetail.key, ...body };
-    if (path === "timetable/delete") return { deleted: body.key };
-    if (path === "settings/save") return body;
-    if (path === "holidays/refresh") return { year: 2026, source: "timor.tech", updated_at: "now", count: 30 };
+    if (path === "timetable/save") return { ...(body || {}), key: (body && body.key) || "preview" };
+    if (path === "timetable/delete") return { deleted: (body && body.key) || "" };
+    if (path === "settings/save") return body || {};
+    if (path === "holidays/refresh") {
+      return { year: now.getFullYear(), source: "", updated_at: "", count: 0 };
+    }
     return {};
   }
 
