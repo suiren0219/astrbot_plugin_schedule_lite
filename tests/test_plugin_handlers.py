@@ -100,9 +100,30 @@ def _install_astrbot_stub() -> None:
         def __init__(self, nodes, **kwargs):
             self.nodes = nodes
 
+    class Plain:
+        def __init__(self, message_str="", **kwargs):
+            self.message_str = message_str
+            self.text = message_str
+
+    class File:
+        def __init__(self, name="", file="", url="", **kwargs):
+            self.name = name
+            self.file = file
+            self.url = url
+
+    class Reply:
+        def __init__(self, id="", sender_id="", message_str="", chain=None, **kwargs):
+            self.id = id
+            self.sender_id = sender_id
+            self.message_str = message_str
+            self.chain = list(chain or [])
+
     components.Image = Image
     components.Node = Node
     components.Nodes = Nodes
+    components.Plain = Plain
+    components.File = File
+    components.Reply = Reply
 
     web_mod = types.ModuleType("astrbot.api.web")
 
@@ -182,7 +203,7 @@ class _Event:
         return "9999"
 
     def get_messages(self):
-        return []
+        return self.message_obj.message
 
     def get_extra(self, key, default=None):
         return default
@@ -969,3 +990,104 @@ def test_section_config_migration(plugin):
     assert isinstance(value, list) and value[0]["index"] == 1
     assert plugin._fallback_sections()[0].start == "08:00"
     assert plugin._migrate_section_config() is False
+
+
+def _generic_import_payload(name="引用测试"):
+    return json.dumps(
+        {
+            "name": name,
+            "term_start": "2026-09-07",
+            "total_weeks": 18,
+            "courses": [
+                {"name": "高等数学", "day": 2, "start": "08:00", "end": "09:40", "weeks": "1-16"}
+            ],
+        },
+        ensure_ascii=False,
+    )
+
+
+def test_import_via_quoted_text(plugin):
+    from astrbot.api.message_components import Plain, Reply
+
+    event = _Event("/课表 导入", group="g1")
+    event.message_obj.message = [Reply(id="1", chain=[Plain(_generic_import_payload())])]
+    outs = asyncio.run(_collect(plugin._h_import(event, "")))
+    assert "已导入课表「引用测试」" in outs[0]
+    assert plugin.store.get("test:10001").courses[0].name == "高等数学"
+
+
+def test_import_via_quoted_message_str(plugin):
+    from astrbot.api.message_components import Reply
+
+    event = _Event("/课表 导入", group="g1")
+    event.message_obj.message = [Reply(id="2", message_str=_generic_import_payload("摘要引用"))]
+    outs = asyncio.run(_collect(plugin._h_import(event, "")))
+    assert "已导入课表「摘要引用」" in outs[0]
+
+
+def test_import_via_quoted_file(plugin, tmp_path):
+    from astrbot.api.message_components import File, Reply
+
+    from .test_importers import ICS_SAMPLE
+
+    ics_path = tmp_path / "课表.ics"
+    ics_path.write_text(ICS_SAMPLE, encoding="utf-8")
+    event = _Event("/课表 导入", group="g1")
+    event.message_obj.message = [
+        Reply(id="3", chain=[File(name="课表.ics", file=str(ics_path))])
+    ]
+    outs = asyncio.run(_collect(plugin._h_import(event, "")))
+    assert "已导入课表" in outs[0]
+    assert plugin.store.get("test:10001").courses
+
+
+def test_payload_wins_over_quote(plugin):
+    from astrbot.api.message_components import Reply
+
+    event = _Event("/课表 导入", group="g1")
+    event.message_obj.message = [Reply(id="4", message_str="这条引用没有课表")]
+    outs = asyncio.run(_collect(plugin._h_import(event, _generic_import_payload("显式参数"))))
+    assert "已导入课表「显式参数」" in outs[0]
+
+
+def test_bare_file_auto_import_private(plugin, tmp_path):
+    from astrbot.api.message_components import File
+
+    from .test_importers import ICS_SAMPLE
+
+    ics_path = tmp_path / "课表.ics"
+    ics_path.write_text(ICS_SAMPLE, encoding="utf-8")
+    event = _Event("")
+    event.message_obj.message = [File(name="课表.ics", file=str(ics_path))]
+    outs = asyncio.run(_collect(plugin.cmd_file_auto_import(event)))
+    assert "已导入课表" in outs[0]
+    assert plugin.store.get("test:10001").courses
+
+
+def test_bare_file_auto_import_group_extension_filter(plugin, tmp_path):
+    from astrbot.api.message_components import File
+
+    from .test_importers import ICS_SAMPLE
+
+    ics_path = tmp_path / "课表.ics"
+    ics_path.write_text(ICS_SAMPLE, encoding="utf-8")
+    event = _Event("", group="g1")
+    event.message_obj.message = [File(name="课表.ics", file=str(ics_path))]
+    outs = asyncio.run(_collect(plugin.cmd_file_auto_import(event)))
+    assert "已导入课表" in outs[0]
+
+    random_file = tmp_path / "资料.zip"
+    random_file.write_bytes(b"PK")
+    event = _Event("", group="g1")
+    event.message_obj.message = [File(name="资料.zip", file=str(random_file))]
+    outs = asyncio.run(_collect(plugin.cmd_file_auto_import(event)))
+    assert outs == []
+
+
+def test_bare_file_skips_command_messages(plugin):
+    from astrbot.api.message_components import File
+
+    event = _Event("/课表 导入", group="g1")
+    event.message_obj.message = [File(name="x.ics", file="/nonexistent.ics")]
+    outs = asyncio.run(_collect(plugin.cmd_file_auto_import(event)))
+    assert outs == []

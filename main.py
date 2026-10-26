@@ -9,6 +9,7 @@
   /课表 在上                       群友现在在上什么课
   /课表 排行 [今日|本周|本月|学期] [全部] 课程时长榜
   /课表 导入 <链接/口令/JSON/文件>  导入课表
+  /课表 导入 + 引用文件/链接消息    引用导入
   /课表 删除                       删除自己的课表
   /课表 提醒 [分钟|关]             上课提醒（私聊）
   /课表 备注 <课程> [备注]          课程备注
@@ -133,6 +134,7 @@ HELP_TEXT = """📚 课表指令
 /课表 在上                    群友现在在上什么课
 /课表 排行 [今日|本周|本月|学期] [全部]
 /课表 导入 <链接/口令/JSON/文件>
+/课表 导入 + 引用文件/链接的消息  引用导入
 /课表 删除
 /课表 提醒 [分钟|关]           私聊订阅上课提醒
 /课表 备注 <课程> [备注]
@@ -181,7 +183,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.4.3",
+    "v1.4.4",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -659,6 +661,31 @@ class ScheduleLitePlugin(Star):
         async for item in self._dispatch(event, rest_override=normalized):
             yield item
 
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def cmd_file_auto_import(self, event):
+        """QQ 的文件只能单独成一条消息；裸文件消息自动走导入。
+
+        私聊任意文件都会尝试导入；群聊只认课表类扩展名，避免误导入。
+        """
+        if event.get_extra("parsed_params") is not None:
+            return  # 正式命令已经处理
+        comps = self._messages(event)
+        if not comps or any(c.__class__.__name__ == "Reply" for c in comps):
+            return  # 引用消息由 /课表 导入 显式触发
+        file_comps = [c for c in comps if c.__class__.__name__ == "File"]
+        if not file_comps:
+            return
+        text = (event.message_str or "").strip()
+        if text.startswith("/课表") or text.startswith("课表"):
+            return  # 已由命令路径处理
+        if event.get_group_id():
+            filename = str(getattr(file_comps[0], "name", "") or "").lower()
+            if not filename.endswith((".ics", ".json", ".csv", ".wakeup_schedule")):
+                return
+        event.stop_event()
+        async for item in self._h_import(event, ""):
+            yield item
+
     async def _dispatch(self, event, rest_override: str | None = None):
         rest = rest_override if rest_override is not None else self._rest(event)
         parts = re.split(r"\s+", rest.strip(), maxsplit=1)
@@ -1008,7 +1035,16 @@ class ScheduleLitePlugin(Star):
             return
         raw = file_text or payload
         if not raw:
-            yield event.plain_result("把课表链接、口令、JSON 文本或文件发给我即可。\n" + detect.HELP)
+            try:
+                raw = await self._quoted_import_text(event)
+            except ImportFailure as e:
+                yield event.plain_result(f"❌ 导入失败：{e}")
+                return
+        if not raw:
+            yield event.plain_result(
+                "把课表链接、口令、JSON 文本或文件发给我即可；"
+                "也可以引用一条包含文件 / 链接 / 口令的消息后发送本命令。\n" + detect.HELP
+            )
             return
 
         try:
@@ -1050,28 +1086,126 @@ class ScheduleLitePlugin(Star):
         lines.append("发送 /课表 查看今天的课表。")
         yield event.plain_result("\n".join(lines))
 
-    async def _attachment_text(self, event) -> str:
+    async def _file_component_text(self, comp) -> str:
+        """把 File 组件读成文本；本消息附件和引用消息共用。"""
         limit = self._max_file_bytes()
+        filename = str(getattr(comp, "name", "") or "").lower()
+        if filename.endswith((".xlsx", ".xls")):
+            raise ImportFailure("暂不支持 Excel，请在表格软件里另存为 CSV 后再发")
+        try:
+            path = str(await asyncio.to_thread(lambda: comp.file) or "")
+        except Exception as e:  # noqa: BLE001
+            raise ImportFailure(f"读取附件失败：{e}") from e
+        url = str(getattr(comp, "url", "") or "")
+        if not path and url.startswith(("http://", "https://")):
+            return url
+        if path.startswith(("http://", "https://")):
+            return path
+        if not path or not os.path.exists(path):
+            raise ImportFailure("附件没有成功下载")
+        size = os.path.getsize(path)
+        if size > limit:
+            raise ImportFailure(f"附件太大（{size / 1024:.0f} KB），上限是 {limit // 1024} KB")
+        data = Path(path).read_bytes()
+        text = self._decode_bytes(data)
+        if text is None:
+            raise ImportFailure("附件编码无法识别：Excel 请另存为 CSV，文本请另存为 UTF-8 后重试")
+        return text
+
+    async def _attachment_text(self, event) -> str:
         for comp in self._messages(event):
             if comp.__class__.__name__ != "File":
                 continue
-            filename = str(getattr(comp, "name", "") or "").lower()
-            if filename.endswith((".xlsx", ".xls")):
-                raise ImportFailure("暂不支持 Excel，请在表格软件里另存为 CSV 后再发")
+            return await self._file_component_text(comp)
+        return ""
+
+    async def _chain_import_text(self, chain) -> str:
+        """从被引用消息的组件链里取课表内容（文本/文件）。"""
+        parts = []
+        for comp in chain or []:
+            name = comp.__class__.__name__ if not isinstance(comp, dict) else ""
+            if name == "Plain":
+                text = getattr(comp, "message_str", None) or getattr(comp, "text", "") or ""
+                parts.append(str(text))
+            elif name == "File":
+                parts.append(await self._file_component_text(comp))
+        return "\n".join(p for p in parts if p.strip())
+
+    async def _platform_quoted_text(self, event, reply_comp) -> str:
+        """回复链为空时，用平台 get_msg 接口取被引用消息的内容。"""
+        msg_id = str(getattr(reply_comp, "id", "") or "").strip()
+        if not msg_id.lstrip("-").isdigit():
+            return ""
+        bot = getattr(event, "bot", None)
+        call_api = getattr(bot, "call_api", None)
+        get_msg = getattr(bot, "get_msg", None)
+        try:
+            if callable(call_api):
+                data = await call_api("get_msg", message_id=int(msg_id))
+            elif callable(get_msg):
+                data = await get_msg(message_id=int(msg_id))
+            else:
+                return ""
+        except Exception:  # noqa: BLE001
+            return ""
+        segments = data.get("message") if isinstance(data, dict) else None
+        if isinstance(segments, str):
+            match = re.search(r"\[CQ:file,([^\]]*)\]", segments)
+            if not match:
+                return re.sub(r"\[CQ:[^\]]+\]", "", segments).strip()
+            attrs = dict(
+                item.split("=", 1) for item in match.group(1).split(",") if "=" in item
+            )
+            segments = [{"type": "file", "data": {k: v.lstrip("&amp;") for k, v in attrs.items()}}]
+        parts = []
+        for seg in segments or []:
+            if not isinstance(seg, dict):
+                continue
+            seg_type = seg.get("type")
+            seg_data = seg.get("data") or {}
+            if seg_type == "text":
+                parts.append(str(seg_data.get("text") or ""))
+            elif seg_type == "file":
+                limit = self._max_file_bytes()
+                filename = str(seg_data.get("name") or seg_data.get("file") or "").lower()
+                if filename.endswith((".xlsx", ".xls")):
+                    raise ImportFailure("暂不支持 Excel，请在表格软件里另存为 CSV 后再发")
+                url = str(seg_data.get("url") or "")
+                path = str(seg_data.get("path") or seg_data.get("file") or "")
+                if url.startswith(("http://", "https://")):
+                    parts.append(url)
+                elif path and os.path.exists(path):
+                    if os.path.getsize(path) > limit:
+                        raise ImportFailure(f"引用的文件太大，上限是 {limit // 1024} KB")
+                    text = self._decode_bytes(Path(path).read_bytes())
+                    if text is None:
+                        raise ImportFailure("引用的文件编码无法识别")
+                    parts.append(text)
+                else:
+                    raise ImportFailure(
+                        "引用消息里的文件拿不到下载地址，请把文件单独发给机器人后重新引用，或直接粘贴文件内容"
+                    )
+        return "\n".join(p for p in parts if p.strip())
+
+    async def _quoted_import_text(self, event) -> str:
+        """引用消息导入：chain → 平台接口 → Reply 自带摘要，三级回退。"""
+        for comp in self._messages(event):
+            if comp.__class__.__name__ != "Reply":
+                continue
+            chain = getattr(comp, "chain", None) or []
+            if chain:
+                text = await self._chain_import_text(chain)
+                if text.strip():
+                    return text
             try:
-                path = await asyncio.to_thread(lambda: comp.file)
-            except Exception as e:  # noqa: BLE001
-                raise ImportFailure(f"读取附件失败：{e}") from e
-            if not path or not os.path.exists(path):
-                raise ImportFailure("附件没有成功下载")
-            size = os.path.getsize(path)
-            if size > limit:
-                raise ImportFailure(f"附件太大（{size / 1024:.0f} KB），上限是 {limit // 1024} KB")
-            data = Path(path).read_bytes()
-            text = self._decode_bytes(data)
-            if text is None:
-                raise ImportFailure("附件编码无法识别：Excel 请另存为 CSV，文本请另存为 UTF-8 后重试")
-            return text
+                text = await self._platform_quoted_text(event, comp)
+            except ImportFailure:
+                raise
+            if text.strip():
+                return text
+            text = str(getattr(comp, "message_str", "") or "")
+            if text.strip():
+                return text
         return ""
 
     async def _check_url(self, url: str) -> None:
