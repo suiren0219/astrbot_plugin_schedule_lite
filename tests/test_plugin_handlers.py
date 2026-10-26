@@ -793,3 +793,64 @@ def test_web_api_save_records(plugin):
     failed = asyncio.run(plugin._api_timetable_save())
     assert isinstance(failed, tuple) and failed[1] == 400
     assert plugin.store.get(key).adjustments == tt.adjustments
+
+
+def test_import_preserves_groups(plugin):
+    event = _Event("/课表 导入", group="g1")
+    _import_sample(plugin, event)
+    assert plugin.store.get("test:10001").group_origins == {"g1": "test:group:g1"}
+
+    # 私聊重新导入不能丢掉群绑定
+    asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    tt = plugin.store.get("test:10001")
+    assert tt.groups == ["g1"]
+    assert tt.group_origins == {"g1": "test:group:g1"}
+
+
+def test_web_api_import(plugin):
+    import astrbot.api.web as web
+
+    web.request.body = {
+        "platform": "aiocqhttp",
+        "owner_id": "40001",
+        "owner_name": "导入同学",
+        "text": json.dumps(
+            {
+                "name": "面板导入",
+                "term_start": "2026-09-07",
+                "total_weeks": 18,
+                "courses": [
+                    {
+                        "name": "高等数学",
+                        "day": 1,
+                        "start": "08:00",
+                        "end": "09:40",
+                        "weeks": "1-16",
+                        "location": "A101",
+                        "teacher": "王老师",
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+    }
+    result = asyncio.run(plugin._api_import())
+    assert result["status"] == "ok"
+    assert result["data"]["key"] == "aiocqhttp:40001"
+    tt = plugin.store.get("aiocqhttp:40001")
+    assert tt.owner_name == "导入同学"
+    assert tt.courses[0].name == "高等数学"
+    assert tt.courses[0].teacher == ""
+    assert tt.courses[0].location == ""
+
+
+def test_web_api_import_requires_fields(plugin):
+    import astrbot.api.web as web
+
+    web.request.body = {"text": "内容"}
+    missing_owner = asyncio.run(plugin._api_import())
+    assert isinstance(missing_owner, tuple) and missing_owner[1] == 400
+
+    web.request.body = {"owner_id": "40001"}
+    missing_text = asyncio.run(plugin._api_import())
+    assert isinstance(missing_text, tuple) and missing_text[1] == 400

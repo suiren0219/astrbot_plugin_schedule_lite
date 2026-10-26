@@ -177,7 +177,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.4.1",
+    "v1.4.2",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -912,42 +912,34 @@ class ScheduleLitePlugin(Star):
 
     # ---------------------------------------------------------- 导入
 
-    async def _h_import(self, event, payload: str):
-        try:
-            file_text = await self._attachment_text(event)
-        except ImportFailure as e:
-            yield event.plain_result(f"❌ 导入失败：{e}")
-            return
-        raw = file_text or payload
-        if not raw:
-            yield event.plain_result("把课表链接、口令、JSON 文本或文件发给我即可。\n" + detect.HELP)
-            return
-
-        try:
-            result = await detect.import_any(
-                raw,
-                fetch=self._fetch,
-                session=self._http,
-                fallback_sections=self._fallback_sections(),
-                default_total_weeks=self._default_total_weeks(),
-                store_teacher=self._store_teacher(),
-                store_location=self._store_location(),
-                tz=self._tz,
-                allow_network=bool(self._cfg("allow_network", True)) and self._http is not None,
-            )
-        except ImportFailure as e:
-            yield event.plain_result(f"❌ 导入失败：{e}")
-            return
-        except Exception as e:  # noqa: BLE001
-            logger.exception(f"[{PLUGIN_NAME}] 导入异常")
-            yield event.plain_result(f"❌ 导入失败：{e}")
-            return
-
-        key = self._user_key(event)
+    async def _import_for_user(
+        self,
+        raw: str,
+        *,
+        owner_id: str,
+        owner_name: str = "",
+        key: str = "",
+        platform: str = "aiocqhttp",
+        group_id: str = "",
+        origin: str = "",
+    ):
+        """聊天和 WebUI 共用的导入入口：解析 → 覆盖旧表 → 落盘。"""
+        result = await detect.import_any(
+            raw,
+            fetch=self._fetch,
+            session=self._http,
+            fallback_sections=self._fallback_sections(),
+            default_total_weeks=self._default_total_weeks(),
+            store_teacher=self._store_teacher(),
+            store_location=self._store_location(),
+            tz=self._tz,
+            allow_network=bool(self._cfg("allow_network", True)) and self._http is not None,
+        )
+        key = (key or f"{platform or 'aiocqhttp'}:{owner_id}").strip()
         old = self.store.get(key)
         tt = Timetable(
-            owner_id=self._sender_id(event),
-            owner_name=self._sender_name(event) or (old.owner_name if old else ""),
+            owner_id=owner_id,
+            owner_name=owner_name or (old.owner_name if old else ""),
             name=result.name,
             term_start=result.term_start.isoformat(),
             total_weeks=result.total_weeks,
@@ -973,12 +965,39 @@ class ScheduleLitePlugin(Star):
                     tt.notes[course_name] = note
                 else:
                     removed_notes.append(course_name)
-        group_id = event.get_group_id() or ""
         if group_id:
-            tt.remember_group(group_id, str(getattr(event, "unified_msg_origin", "") or ""))
-
+            tt.remember_group(group_id, origin)
         self.store.put(key, tt)
         await self._save()
+        return key, tt, result, removed_notes
+
+    async def _h_import(self, event, payload: str):
+        try:
+            file_text = await self._attachment_text(event)
+        except ImportFailure as e:
+            yield event.plain_result(f"❌ 导入失败：{e}")
+            return
+        raw = file_text or payload
+        if not raw:
+            yield event.plain_result("把课表链接、口令、JSON 文本或文件发给我即可。\n" + detect.HELP)
+            return
+
+        try:
+            _key, tt, result, removed_notes = await self._import_for_user(
+                raw,
+                owner_id=self._sender_id(event),
+                owner_name=self._sender_name(event),
+                key=self._user_key(event),
+                group_id=event.get_group_id() or "",
+                origin=str(getattr(event, "unified_msg_origin", "") or ""),
+            )
+        except ImportFailure as e:
+            yield event.plain_result(f"❌ 导入失败：{e}")
+            return
+        except Exception as e:  # noqa: BLE001
+            logger.exception(f"[{PLUGIN_NAME}] 导入异常")
+            yield event.plain_result(f"❌ 导入失败：{e}")
+            return
 
         distinct = len({c.name for c in tt.courses})
         lines = [
@@ -1824,6 +1843,7 @@ class ScheduleLitePlugin(Star):
             ("timetable", self._api_timetable, ["GET"], "课表详情"),
             ("timetable/save", self._api_timetable_save, ["POST"], "新增/保存课表"),
             ("timetable/delete", self._api_timetable_delete, ["POST"], "删除课表"),
+            ("import", self._api_import, ["POST"], "导入课表"),
             ("settings", self._api_settings, ["GET"], "读取设置"),
             ("settings/save", self._api_settings_save, ["POST"], "保存设置"),
             ("holidays", self._api_holidays, ["GET"], "节假日"),
@@ -2194,6 +2214,45 @@ class ScheduleLitePlugin(Star):
             await self._save()
             return self._ok({"deleted": key})
         except Exception as exc:  # noqa: BLE001
+            return self._err(str(exc), 500)
+
+    async def _api_import(self):
+        try:
+            payload = await self._json_body()
+            if not isinstance(payload, dict):
+                return self._err("请求内容不是对象")
+            text = str(payload.get("text") or "").strip()
+            if not text:
+                return self._err("导入内容不能为空")
+            owner_id = str(payload.get("owner_id") or "").strip()
+            if not owner_id:
+                return self._err("请填写用户 ID")
+            platform = str(payload.get("platform") or "aiocqhttp").strip() or "aiocqhttp"
+            key = str(payload.get("key") or "").strip() or f"{platform}:{owner_id}"
+            owner_name = str(payload.get("owner_name") or "").strip()
+            try:
+                key, tt, result, _removed = await self._import_for_user(
+                    text,
+                    owner_id=owner_id,
+                    owner_name=owner_name,
+                    key=key,
+                    platform=platform,
+                )
+            except ImportFailure as exc:
+                return self._err(str(exc))
+            return self._ok(
+                {
+                    **self._tt_summary(key, tt),
+                    "source": result.source,
+                    "term_start": tt.term_start,
+                    "distinct": len({c.name for c in tt.courses}),
+                    "merged": result.merged,
+                    "dropped": result.dropped,
+                    "warnings": list(result.warnings[:4]),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"[{PLUGIN_NAME}] WebUI 导入失败")
             return self._err(str(exc), 500)
 
     _SETTING_KEYS = (

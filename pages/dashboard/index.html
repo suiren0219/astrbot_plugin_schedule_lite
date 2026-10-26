@@ -58,6 +58,23 @@
       <section id="view-data" class="view" hidden>
         <div class="card">
           <div class="section-head">
+            <div><h2>导入课表</h2><p>粘贴口令 / 链接 / JSON / ICS，由 AstrBot 后台解析入库</p></div>
+          </div>
+          <div class="import-grid">
+            <label>平台<input class="input" id="import-platform" value="aiocqhttp"></label>
+            <label>用户 ID<input class="input" id="import-owner-id" placeholder="QQ 号"></label>
+            <label>昵称<input class="input" id="import-owner-name" placeholder="同学昵称"></label>
+          </div>
+          <label class="import-content">课表内容<textarea class="input textarea" id="import-text" rows="5" placeholder="粘贴分享口令、分享链接、JSON 或 ICS 文本"></textarea></label>
+          <div class="import-actions">
+            <input type="file" id="import-file" hidden accept=".ics,.json,.txt,.wakeup_schedule,.csv">
+            <button class="btn ghost" id="import-pick" type="button">选择文件</button>
+            <span class="spacer"></span>
+            <button class="btn primary" id="import-submit" type="button">导入</button>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-head">
             <div><h2>课表数据</h2><p>可以直接新增、编辑或删除绑定记录</p></div>
             <div class="row-actions">
               <input id="search" class="input" placeholder="搜索昵称 / QQ / 课表名">
@@ -113,15 +130,15 @@
             <label class="setting"><span><b>累计范围</b><small>本周或本月</small></span>
               <select class="input" id="set-recap-mode"><option value="week">本周</option><option value="month">本月</option></select>
             </label>
-            <label class="setting"><span><b>展示人数</b><small>Top N</small></span><input class="input short" type="number" id="set-recap-top"></label>
+            <label class="setting wide"><span><b>展示人数</b><small>Top N，不足的人数自动忽略</small></span><input class="input short" type="number" id="set-recap-top"></label>
           </div>
         </div>
         <div class="card">
           <div class="section-head"><div><h2>节假日数据</h2><p>国务院通知整理源，失败自动回退</p></div></div>
           <div class="setting-grid">
             <label class="setting"><span><b>启用调休判断</b><small>查询时本地生效</small></span><input type="checkbox" id="set-holiday-enabled"></label>
-            <label class="setting wide"><span><b>数据源</b><small>支持 {year} 占位符</small></span><input class="input" id="set-holiday-url"></label>
             <label class="setting"><span><b>缓存小时</b><small>后台刷新间隔</small></span><input class="input short" type="number" id="set-holiday-hours"></label>
+            <label class="setting wide"><span><b>数据源</b><small>支持 {year} 占位符</small></span><input class="input" id="set-holiday-url"></label>
             <label class="setting wide column"><span><b>全局补班映射</b><small>每行「日期 周几」，例如 2026-10-10 周四</small></span><textarea class="input textarea" id="set-makeup-map" rows="3" placeholder="2026-10-10 周四&#10;2027-02-20 周三"></textarea></label>
           </div>
         </div>
