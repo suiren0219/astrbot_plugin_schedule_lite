@@ -145,10 +145,11 @@ HELP_TEXT = """📚 课表指令
 /课表 销假 [日期]               取消请假
 /课表 调课 [课程] A B [互换]    调课；撤销 [日期] / 清空
 /课表 调休 [日期] [周几|清]     查看节假日/设置补班
+/课表 倒计时                   重要日期（四六级等，控制台维护）
 /课表 帮助
 
 群友状态优先显示翘课/请假，无课排最后；人多自动隐藏无课并分页。
-控制台可增删课表、刷新节假日、设置满课榜和累计榜。
+控制台可增删课表、刷新节假日、设置早八推送、满课榜和累计榜。
 
 支持导入：Nexio 分享口令/JSON/ICS、小爱课程表分享链接、WakeUp 口令/备份、
 iCalendar(.ics)、拾光课程表 JSON、通用 JSON/CSV。也可以直接发文件。"""
@@ -169,6 +170,7 @@ SUBCOMMANDS = {
     "销假": "leave_cancel", "leave_cancel": "leave_cancel",
     "调课": "adjust", "adjust": "adjust",
     "调休": "makeup", "makeup": "makeup", "补班": "makeup",
+    "倒计时": "countdown", "countdown": "countdown", "考试": "countdown",
 }
 
 RANK_MODES = {
@@ -183,7 +185,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.4.5",
+    "v1.5.0",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -202,6 +204,7 @@ class ScheduleLitePlugin(Star):
         self._holidays: dict[int, HolidayCalendar] = {}
         self._makeup_text: str | None = None
         self._makeup_values: dict[str, int] = {}
+        self._events: list[dict] = []
         self._broadcast_state: dict[str, dict[str, str]] = {}
         # 按用户缓存当天的课程快照和分钟级状态，多个群查询可直接复用
         self._day_cache: dict[tuple[int, str, int], list] = {}
@@ -222,6 +225,7 @@ class ScheduleLitePlugin(Star):
             logger.info(f"[{PLUGIN_NAME}] 已按隐私配置清除历史课表中的教师/地点")
         if self._migrate_section_config():
             logger.info(f"[{PLUGIN_NAME}] 已把默认作息迁移为列表结构")
+        self._load_events()
         self._load_broadcast_state()
         self._load_holiday_cache(self._now().year)
         if self._cfg("holiday_enabled", True):
@@ -329,6 +333,43 @@ class ScheduleLitePlugin(Star):
         return Path(self._data_path()).parent
 
     # ---------------------------------------------------------- 节假日 / 定时节目
+
+    def _events_path(self) -> Path:
+        return self._plugin_data_dir() / "events.json"
+
+    @staticmethod
+    def _clean_events(raw) -> list[dict]:
+        events = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or "").strip()[:60]
+            day = parse_date(item.get("date"))
+            if not name or day is None:
+                continue
+            events.append({"name": name, "date": day.isoformat()})
+        events.sort(key=lambda item: item["date"])
+        return events[:100]
+
+    def _load_events(self) -> None:
+        try:
+            payload = json.loads(self._events_path().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = []
+        self._events = self._clean_events(payload)
+
+    def _save_events(self) -> None:
+        path = self._events_path()
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps(self._events, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+        except OSError as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 重要日期写入失败: {exc}")
 
     def _holiday_cache_path(self, year: int) -> Path:
         return self._plugin_data_dir() / "holidays" / f"{year}.json"
@@ -762,6 +803,10 @@ class ScheduleLitePlugin(Star):
             async for item in self._h_makeup(event, tail.strip()):
                 yield item
             return
+        if sub == "countdown":
+            async for item in self._h_countdown(event):
+                yield item
+            return
 
         async for item in self._h_query(event, rest):
             yield item
@@ -977,6 +1022,36 @@ class ScheduleLitePlugin(Star):
 
     # ---------------------------------------------------------- 导入
 
+    def _guess_raw_ext(self, raw: str) -> str:
+        head = (raw or "").lstrip()[:200].upper()
+        if "BEGIN:VCALENDAR" in head:
+            return ".ics"
+        if head.startswith("{") or head.startswith("["):
+            return ".json"
+        lines = head.splitlines()
+        if lines and lines[0].count(",") >= 2:
+            return ".csv"
+        return ".txt"
+
+    def _archive_raw_import(self, key: str, raw: str) -> str:
+        """把导入的原始内容完整存档成文件，路径记到课表上。"""
+        raw = (raw or "").strip()
+        if not raw:
+            return ""
+        safe_key = re.sub(r"[^0-9A-Za-z_\-\u4e00-\u9fff]+", "_", key).strip("_") or "user"
+        directory = self._plugin_data_dir() / "imports" / safe_key
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            path = directory / f"{self._now():%Y%m%d-%H%M%S}{self._guess_raw_ext(raw)}"
+            path.write_text(raw, encoding="utf-8")
+            files = sorted(directory.glob("*"))
+            for old in files[:-20]:
+                old.unlink(missing_ok=True)
+        except OSError as exc:
+            logger.warning(f"[{PLUGIN_NAME}] 原始导入文件存档失败: {exc}")
+            return ""
+        return path.relative_to(self._plugin_data_dir()).as_posix()
+
     async def _import_for_user(
         self,
         raw: str,
@@ -1032,6 +1107,9 @@ class ScheduleLitePlugin(Star):
                     removed_notes.append(course_name)
         if group_id:
             tt.remember_group(group_id, origin)
+        raw_source = self._archive_raw_import(key, raw)
+        if raw_source:
+            tt.raw_source = raw_source
         self.store.put(key, tt)
         await self._save()
         return key, tt, result, removed_notes
@@ -1594,10 +1672,87 @@ class ScheduleLitePlugin(Star):
             day += timedelta(days=1)
         return total / 60.0
 
+    def _render_rank_card(self, title: str, subtitle: str, rows: list[dict]) -> list:
+        """排行榜 / 节假日卡片：复用状态卡渲染，失败返回空列表退回文本。"""
+        if not self._image_enabled("everyone_image"):
+            return []
+        entries = [
+            {
+                "name": row.get("name", ""),
+                "type": int(row.get("type", 1) or 1),
+                "label": row.get("label", ""),
+                "main": row.get("main", ""),
+                "sub": row.get("sub", ""),
+            }
+            for row in rows
+        ]
+        try:
+            cache_dir = self._plugin_data_dir() / "cache" / "rank"
+            return render_mod.render_everyone(
+                entries,
+                cache_dir,
+                title=title,
+                subtitle=subtitle,
+                footer_note="",
+                page_size=20,
+                width=self._image_width(),
+                font_path=self._font_path(),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 排行卡片生成失败: {e}")
+            return []
+
+    def _rank_image_chain(self, paths) -> MessageChain | None:
+        if not paths:
+            return None
+        try:
+            try:
+                from astrbot.api.message_components import Image
+            except ImportError:
+                from astrbot.core.message.components import Image  # type: ignore
+            return MessageChain([Image.fromFileSystem(str(path)) for path in paths])
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 排行图片组件构建失败: {e}")
+            return None
+
+    def _build_at_chain(self, rows, header: str) -> MessageChain | None:
+        """早八推送艾特版：At 组件逐个 @ 同学；构建失败返回 None 退回文本。"""
+        try:
+            try:
+                from astrbot.api.message_components import At, Plain
+            except ImportError:
+                from astrbot.core.message.components import At, Plain  # type: ignore
+            chain = [Plain(f"{header}\n")]
+            for tt, item in rows:
+                course = item.course
+                line = f" {tt.owner_name or tt.owner_id} · {course.name} {item.start}-{item.end}"
+                if course.location:
+                    line += f" @{course.location}"
+                chain.append(At(qq=str(tt.owner_id)))
+                chain.append(Plain(line + "\n"))
+            return MessageChain(chain=chain)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 早八艾特消息构建失败: {e}")
+            return None
+
+    def _upcoming_event_lines(self, today: date, within_days: int = 30) -> list[str]:
+        lines = []
+        for item in self._events:
+            try:
+                day = date.fromisoformat(item["date"])
+            except (KeyError, ValueError):
+                continue
+            days = (day - today).days
+            if 0 <= days <= within_days:
+                when = "就是今天" if days == 0 else f"还有 {days} 天"
+                lines.append(f"📅 {item['name']} {day:%m/%d} · {when}")
+        return lines
+
     async def _check_scheduled_broadcasts(self, now: datetime) -> None:
         showcase_enabled = bool(self._cfg("showcase_enabled", False))
         recap_enabled = bool(self._cfg("recap_enabled", False))
-        if not showcase_enabled and not recap_enabled:
+        early_enabled = bool(self._cfg("early_enabled", False))
+        if not showcase_enabled and not recap_enabled and not early_enabled:
             return
         today = now.date()
         now_min = now.hour * 60 + now.minute
@@ -1605,6 +1760,66 @@ class ScheduleLitePlugin(Star):
         if not origins:
             return
         all_tt = self.store.all()
+
+        if early_enabled:
+            hour, minute = self._hhmm(
+                str(self._cfg("early_time", "21:30") or "21:30"), "21:30"
+            )
+            target = hour * 60 + minute
+            max_start = minutes_of(str(self._cfg("early_max_start", "08:00") or "08:00")) or 480
+            use_at = bool(self._cfg("early_at", False))
+            if now_min >= target:
+                tomorrow = today + timedelta(days=1)
+                calendar_tomorrow = self._calendar_for(tomorrow)
+                tomorrow_off = bool(
+                    calendar_tomorrow and calendar_tomorrow.is_off(tomorrow)
+                )
+                event_lines = self._upcoming_event_lines(tomorrow)
+                for group_id, origin in origins.items():
+                    if tomorrow_off:
+                        continue
+                    visible = timetables_of_group(all_tt.values(), group_id)
+                    rows = []
+                    for tt in visible:
+                        if tt.leave_on(tomorrow):
+                            continue
+                        items = day_entries(tt, tomorrow, calendar_tomorrow)
+                        if not items:
+                            continue
+                        first = items[0]
+                        if (minutes_of(first.start) or 1440) > max_start:
+                            continue
+                        rows.append((tt, first))
+                    if not rows:
+                        continue
+                    if not self._claim_broadcast("early", group_id, today):
+                        continue
+                    rows.sort(key=lambda row: minutes_of(row[1].start) or 0)
+                    header = (
+                        f"⏰ 明日早八提醒 · {tomorrow:%m/%d} {weekday_cn(tomorrow)}"
+                        f" · 共 {len(rows)} 人"
+                    )
+                    if use_at:
+                        chain = self._build_at_chain(rows, header)
+                    else:
+                        chain = None
+                    if chain is None:
+                        lines = [header]
+                        for index, (tt, item) in enumerate(rows[:20], 1):
+                            course = item.course
+                            line = (
+                                f"{index}. {tt.owner_name or tt.owner_id} · "
+                                f"{course.name} {item.start}-{item.end}"
+                            )
+                            if course.location:
+                                line += f" @{course.location}"
+                            lines.append(line)
+                        chain = MessageChain().message("\n".join(lines))
+                    try:
+                        await self.context.send_message(origin, chain)
+                    except Exception as exc:  # noqa: BLE001
+                        logger.warning(f"[{PLUGIN_NAME}] 早八推送失败 {group_id}: {exc}")
+                        self._release_broadcast("early", group_id)
 
         if showcase_enabled:
             hour, minute = self._hhmm(
@@ -1640,13 +1855,31 @@ class ScheduleLitePlugin(Star):
                     if not self._claim_broadcast("showcase", group_id, today):
                         continue
                     ranked.sort(reverse=True)
-                    lines = ["🌙 今日满课榜", f"{today:%m/%d} · 共 {len(ranked)} 人"]
-                    for index, (minutes, name) in enumerate(ranked[:10], 1):
-                        lines.append(f"{index}. {name} · {minutes / 60:.1f} 小时")
+                    subtitle = (
+                        f"{today:%m/%d} · 满 {min_minutes / 60:.0f} 小时以上"
+                        f" · 共 {len(ranked)} 人"
+                    )
+                    paths = self._render_rank_card(
+                        "🌙 今日满课榜",
+                        subtitle,
+                        [
+                            {
+                                "name": name,
+                                "label": f"#{index}",
+                                "main": f"{minutes / 60:.1f} 小时",
+                                "sub": "",
+                            }
+                            for index, (minutes, name) in enumerate(ranked[:20], 1)
+                        ],
+                    )
+                    chain = self._rank_image_chain(paths)
+                    if chain is None:
+                        lines = ["🌙 今日满课榜", f"{today:%m/%d} · 共 {len(ranked)} 人"]
+                        for index, (minutes, name) in enumerate(ranked[:10], 1):
+                            lines.append(f"{index}. {name} · {minutes / 60:.1f} 小时")
+                        chain = MessageChain().message("\n".join(lines))
                     try:
-                        await self.context.send_message(
-                            origin, MessageChain().message("\n".join(lines))
-                        )
+                        await self.context.send_message(origin, chain)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(f"[{PLUGIN_NAME}] 满课榜发送失败 {group_id}: {exc}")
                         self._release_broadcast("showcase", group_id)
@@ -1687,13 +1920,28 @@ class ScheduleLitePlugin(Star):
                         continue
                     ranked.sort(reverse=True)
                     label = "本月" if mode == "month" else "本周"
-                    lines = [f"📊 {label}累计上课榜", f"截至 {today:%m/%d}"]
-                    for index, (hours, name) in enumerate(ranked[:top_n], 1):
-                        lines.append(f"#{index} {name} · {hours:.1f} 小时")
+                    subtitle = f"截至 {today:%m/%d} · {label}实际在课时长"
+                    paths = self._render_rank_card(
+                        f"📊 {label}累计上课榜",
+                        subtitle,
+                        [
+                            {
+                                "name": name,
+                                "label": f"#{index}",
+                                "main": f"{hours:.1f} 小时",
+                                "sub": "",
+                            }
+                            for index, (hours, name) in enumerate(ranked[:top_n], 1)
+                        ],
+                    )
+                    chain = self._rank_image_chain(paths)
+                    if chain is None:
+                        lines = [f"📊 {label}累计上课榜", f"截至 {today:%m/%d}"]
+                        for index, (hours, name) in enumerate(ranked[:top_n], 1):
+                            lines.append(f"#{index} {name} · {hours:.1f} 小时")
+                        chain = MessageChain().message("\n".join(lines))
                     try:
-                        await self.context.send_message(
-                            origin, MessageChain().message("\n".join(lines))
-                        )
+                        await self.context.send_message(origin, chain)
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(f"[{PLUGIN_NAME}] 周报发送失败 {group_id}: {exc}")
                         self._release_broadcast("recap", group_id)
@@ -1951,15 +2199,36 @@ class ScheduleLitePlugin(Star):
         text = args.strip()
         if not text:
             calendar = self._calendar_for(today)
-            lines = ["📅 国务院节假日 / 调休"]
-            if calendar is None:
-                lines.append("还没有本地缓存，插件会在后台自动更新。")
-            else:
+            upcoming = []
+            if calendar is not None:
                 upcoming = [
                     (day, item)
                     for day, item in sorted(calendar.days.items())
                     if day >= (today - timedelta(days=3)).isoformat()
                 ][:10]
+            rows = [
+                {
+                    "name": (item.get("name") or ("放假" if item.get("off") else "补班"))
+                    + ("" if item.get("off") else "（按周几上课看下方映射）"),
+                    "label": "放假" if item.get("off") else "补班",
+                    "type": 1 if item.get("off") else 2,
+                    "main": str(item.get("name") or ""),
+                    "sub": day,
+                }
+                for day, item in upcoming
+            ]
+            paths = self._render_rank_card(
+                "📅 节假日与调休",
+                f"今天 {today:%m/%d} {weekday_cn(today)}"
+                + (f" · 来源 {calendar.source}" if calendar else ""),
+                rows,
+            )
+            if paths and await self._send_image_pages(event, paths, title="节假日与调休"):
+                return
+            lines = ["📅 国务院节假日 / 调休"]
+            if calendar is None:
+                lines.append("还没有本地缓存，插件会在后台自动更新。")
+            else:
                 for day, item in upcoming:
                     mark = "放假" if item.get("off") else "补班"
                     lines.append(f"{day} {item.get('name') or ''} · {mark}")
@@ -2003,6 +2272,30 @@ class ScheduleLitePlugin(Star):
             f"✅ {target:%Y/%m/%d} 将按周{'一二三四五六日'[weekday - 1]}课表上课。"
         )
 
+    async def _h_countdown(self, event):
+        """重要日期倒计时：四六级、期末考试等，控制台「重要日期」里维护。"""
+        today = self._now().date()
+        if not self._events:
+            yield event.plain_result(
+                "🎯 还没有设置重要日期。\n"
+                "请在控制台的「重要日期」卡片里添加，比如四六级、期末考试，"
+                "早八推送里也会自动带上。"
+            )
+            return
+        upcoming = [item for item in self._events if item["date"] >= today.isoformat()]
+        past = len(self._events) - len(upcoming)
+        lines = ["🎯 重要日期倒计时"]
+        for item in upcoming[:12]:
+            day = date.fromisoformat(item["date"])
+            days = (day - today).days
+            when = "就是今天" if days == 0 else f"还有 {days} 天"
+            lines.append(f"{day:%m/%d} {weekday_cn(day)} · {item['name']} · {when}")
+        if not upcoming:
+            lines.append("设置的重要日期都已过期。")
+        elif past:
+            lines.append(f"（另有 {past} 个已过期日期未显示）")
+        yield event.plain_result("\n".join(lines))
+
     # ---------------------------------------------------------- WebUI 控制台
 
     def _register_web_apis(self) -> None:
@@ -2016,6 +2309,10 @@ class ScheduleLitePlugin(Star):
             ("timetable/save", self._api_timetable_save, ["POST"], "新增/保存课表"),
             ("timetable/delete", self._api_timetable_delete, ["POST"], "删除课表"),
             ("import", self._api_import, ["POST"], "导入课表"),
+            ("events", self._api_events_get, ["GET"], "重要日期"),
+            ("events/save", self._api_events_save, ["POST"], "保存重要日期"),
+            ("backup", self._api_backup, ["GET"], "导出全部数据"),
+            ("restore", self._api_restore, ["POST"], "恢复备份"),
             ("settings", self._api_settings, ["GET"], "读取设置"),
             ("settings/save", self._api_settings_save, ["POST"], "保存设置"),
             ("holidays", self._api_holidays, ["GET"], "节假日"),
@@ -2427,6 +2724,75 @@ class ScheduleLitePlugin(Star):
             logger.exception(f"[{PLUGIN_NAME}] WebUI 导入失败")
             return self._err(str(exc), 500)
 
+    async def _api_events_get(self):
+        try:
+            return self._ok({"items": list(self._events)})
+        except Exception as exc:  # noqa: BLE001
+            return self._err(str(exc), 500)
+
+    async def _api_events_save(self):
+        try:
+            payload = await self._json_body()
+            if not isinstance(payload, dict):
+                return self._err("请求内容不是对象")
+            self._events = self._clean_events(payload.get("items"))
+            self._save_events()
+            return self._ok({"items": list(self._events)})
+        except Exception as exc:  # noqa: BLE001
+            return self._err(str(exc), 500)
+
+    async def _api_backup(self):
+        try:
+            return self._ok(
+                {
+                    "version": 1,
+                    "plugin": PLUGIN_NAME,
+                    "exported_at": self._now().isoformat(timespec="seconds"),
+                    "users": {
+                        key: tt.to_dict() for key, tt in self.store.all().items()
+                    },
+                    "events": list(self._events),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"[{PLUGIN_NAME}] 备份导出失败")
+            return self._err(str(exc), 500)
+
+    async def _api_restore(self):
+        try:
+            payload = await self._json_body()
+            if not isinstance(payload, dict):
+                return self._err("请求内容不是对象")
+            users = payload.get("users")
+            if not isinstance(users, dict):
+                return self._err("备份内容缺少 users 字段")
+            items: dict[str, Timetable] = {}
+            skipped = 0
+            for key, value in users.items():
+                if not isinstance(value, dict):
+                    skipped += 1
+                    continue
+                try:
+                    tt = Timetable.from_dict(value)
+                except (TypeError, ValueError, KeyError):
+                    skipped += 1
+                    continue
+                if not tt.owner_id:
+                    tt.owner_id = str(key)
+                items[str(key)] = tt
+            if not items:
+                return self._err("备份里没有可恢复的课表")
+            self.store.replace(items)
+            await self._save()
+            events = payload.get("events")
+            if isinstance(events, list):
+                self._events = self._clean_events(events)
+                self._save_events()
+            return self._ok({"restored": len(items), "skipped": skipped})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"[{PLUGIN_NAME}] 恢复备份失败")
+            return self._err(str(exc), 500)
+
     _SETTING_KEYS = (
         "store_teacher",
         "store_location",
@@ -2448,6 +2814,10 @@ class ScheduleLitePlugin(Star):
         "holiday_api_url",
         "holiday_cache_hours",
         "makeup_weekday_map",
+        "early_enabled",
+        "early_time",
+        "early_max_start",
+        "early_at",
     )
 
     def _settings_view(self) -> dict:

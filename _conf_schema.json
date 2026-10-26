@@ -274,5 +274,29 @@
       "max": 20,
       "step": 1
     }
+  },
+  "early_enabled": {
+    "description": "⏰ 启用明日早八推送",
+    "type": "bool",
+    "default": false,
+    "hint": "前一晚在设定时间推送明天有早八的同学；节假日自动跳过，30 天内的重要日期会附带。"
+  },
+  "early_time": {
+    "description": "🕙 早八推送时间",
+    "type": "string",
+    "default": "21:30",
+    "hint": "24 小时制 HH:MM，前一晚发送。"
+  },
+  "early_max_start": {
+    "description": "🌅 早八界限",
+    "type": "string",
+    "default": "08:00",
+    "hint": "明天首节课开始时间不晚于这个值才推送；改成 08:30 可把第一节也包含进来。"
+  },
+  "early_at": {
+    "description": "📣 推送时艾特同学",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后逐个 @ 对应同学；平台不支持 At 时自动退回纯文本。"
   }
 }

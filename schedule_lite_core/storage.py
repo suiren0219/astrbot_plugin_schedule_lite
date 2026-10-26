@@ -88,6 +88,12 @@ class TimetableStore:
     def delete(self, key: str) -> Timetable | None:
         return self._load().pop(key, None)
 
+    def replace(self, items: dict[str, Timetable]) -> None:
+        """整表替换（恢复备份用），保持对象引用有效。"""
+        data = self._load()
+        data.clear()
+        data.update(items)
+
     def all(self) -> dict[str, Timetable]:
         return dict(self._load())
 

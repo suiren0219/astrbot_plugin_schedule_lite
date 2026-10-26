@@ -105,6 +105,10 @@ def _install_astrbot_stub() -> None:
             self.message_str = message_str
             self.text = message_str
 
+    class At:
+        def __init__(self, qq="", **kwargs):
+            self.qq = qq
+
     class File:
         def __init__(self, name="", file="", url="", **kwargs):
             self.name = name
@@ -122,6 +126,7 @@ def _install_astrbot_stub() -> None:
     components.Node = Node
     components.Nodes = Nodes
     components.Plain = Plain
+    components.At = At
     components.File = File
     components.Reply = Reply
 
@@ -631,6 +636,16 @@ def _scheduled_plugin(tmp_path, config):
     return plugin, ctx
 
 
+def _assert_broadcast_content(ctx, keyword: str) -> None:
+    """广播可能渲染成图片（本机有中文字体）或退回文本，两种都要接受。"""
+    assert len(ctx.sent) >= 1
+    first = ctx.sent[0][1].chain[0]
+    if isinstance(first, str):
+        assert keyword in first
+    else:
+        assert Path(str(getattr(first, "file", ""))).exists()
+
+
 def test_showcase_broadcast_once(tmp_path):
     plugin, ctx = _scheduled_plugin(
         tmp_path,
@@ -646,8 +661,7 @@ def test_showcase_broadcast_once(tmp_path):
     asyncio.run(plugin._check_scheduled_broadcasts(now))
     assert len(ctx.sent) == 1
     assert ctx.sent[0][0] == "test:group:g1"
-    assert "今日满课榜" in ctx.sent[0][1].chain[0]
-    assert "甲" in ctx.sent[0][1].chain[0]
+    _assert_broadcast_content(ctx, "今日满课榜")
 
     asyncio.run(plugin._check_scheduled_broadcasts(now))
     assert len(ctx.sent) == 1
@@ -670,8 +684,7 @@ def test_recap_broadcast_on_configured_weekday(tmp_path):
     now = plugin._now().replace(hour=21, minute=5, second=0, microsecond=0)
     asyncio.run(plugin._check_scheduled_broadcasts(now))
     assert len(ctx.sent) == 1
-    assert "累计上课榜" in ctx.sent[0][1].chain[0]
-    assert "甲" in ctx.sent[0][1].chain[0]
+    _assert_broadcast_content(ctx, "累计上课榜")
 
 
 def test_adjust_swap_does_not_duplicate(plugin):
@@ -1131,3 +1144,122 @@ def test_glued_skips_command_claimed_messages(plugin):
     outs = asyncio.run(glued(event))
     assert any("已导入课表「粘连形式」" in str(out) for out in outs)
     assert len(plugin.store.all()) == 1
+
+
+def test_import_archives_raw_file(plugin):
+    event = _Event("/课表 导入", group="g1")
+    asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    tt = plugin.store.get("test:10001")
+    assert tt.raw_source
+    raw_path = plugin._plugin_data_dir() / tt.raw_source
+    assert raw_path.exists()
+    assert json.loads(raw_path.read_text(encoding="utf-8")) == SHIGUANG_SAMPLE
+    assert raw_path.suffix == ".json"
+
+
+def test_web_api_import_archives_raw(plugin):
+    import astrbot.api.web as web
+
+    payload = _generic_import_payload("存档同学")
+    web.request.body = {"platform": "aiocqhttp", "owner_id": "50001", "text": payload}
+    result = asyncio.run(plugin._api_import())
+    assert result["status"] == "ok"
+    tt = plugin.store.get("aiocqhttp:50001")
+    assert tt.raw_source
+    assert (plugin._plugin_data_dir() / tt.raw_source).read_text(encoding="utf-8") == payload
+
+
+def test_events_api_and_countdown(plugin):
+    import astrbot.api.web as web
+
+    web.request.body = {
+        "items": [
+            {"name": "CET-6", "date": "2026-12-19"},
+            {"name": "坏数据", "date": "不是日期"},
+        ]
+    }
+    saved = asyncio.run(plugin._api_events_save())
+    assert saved["status"] == "ok"
+    assert [item["name"] for item in saved["data"]["items"]] == ["CET-6"]
+
+    web.request.args = {}
+    got = asyncio.run(plugin._api_events_get())
+    assert got["data"]["items"][0]["date"] == "2026-12-19"
+
+    event = _Event("/课表 倒计时", group="g1")
+    outs = asyncio.run(_collect(plugin._h_countdown(event)))
+    assert "CET-6" in outs[0]
+
+
+def test_backup_and_restore_roundtrip(plugin):
+    import astrbot.api.web as web
+
+    _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    backup = asyncio.run(plugin._api_backup())
+    assert backup["status"] == "ok"
+    assert "test:10001" in backup["data"]["users"]
+
+    # 破坏现场后再恢复
+    plugin.store.delete("test:10001")
+    plugin._events = [{"name": "CET-6", "date": "2026-12-19"}]
+    web.request.body = backup["data"]
+    result = asyncio.run(plugin._api_restore())
+    assert result["status"] == "ok"
+    assert result["data"]["restored"] == 1
+    assert plugin.store.get("test:10001").courses
+    assert plugin._events == []
+
+
+def test_early_push_tomorrow_early_birds(tmp_path):
+    import main as plugin_main
+    from datetime import timedelta
+
+    from schedule_lite_core.model import Course, Timetable
+
+    class _Ctx:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, origin, chain):
+            self.sent.append((origin, chain))
+
+    plugin_main.StarTools._dir = tmp_path
+    ctx = _Ctx()
+    plugin = plugin_main.ScheduleLitePlugin(
+        ctx,
+        {
+            "early_enabled": True,
+            "early_time": "21:30",
+            "early_max_start": "08:00",
+            "early_at": True,
+            "showcase_enabled": False,
+            "recap_enabled": False,
+        },
+    )
+    now = plugin._now()
+    tomorrow = now.date() + timedelta(days=1)
+    monday = now.date() - timedelta(days=now.isoweekday() - 1)
+
+    def make_tt(uid, name, start):
+        return Timetable(
+            owner_id=uid,
+            owner_name=name,
+            term_start=monday.isoformat(),
+            total_weeks=20,
+            courses=[Course(name=f"课{uid}", day=tomorrow.isoweekday(), weeks=[1, 2], start=start, end="09:40")],
+            groups=["g1"],
+            group_origins={"g1": "test:group:g1"},
+        )
+
+    plugin.store.put("t:1", make_tt("1", "早八同学", "08:00"))
+    plugin.store.put("t:2", make_tt("2", "下午同学", "14:00"))
+
+    now21 = now.replace(hour=21, minute=31, second=0, microsecond=0)
+    asyncio.run(plugin._check_scheduled_broadcasts(now21))
+    assert len(ctx.sent) == 1
+    chain = ctx.sent[0][1].chain
+    ats = [c for c in chain if c.__class__.__name__ == "At"]
+    assert [str(a.qq) for a in ats] == ["1"]
+
+    asyncio.run(plugin._check_scheduled_broadcasts(now21))
+    assert len(ctx.sent) == 1
