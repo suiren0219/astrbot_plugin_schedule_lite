@@ -7,7 +7,7 @@
 命令：
   /课表 [明天|周一|9/1] [@某人]     查看课表
   /课表 在上                       群友现在在上什么课
-  /课表 排行 [今日|本周|学期] [全部] 课程时长榜
+  /课表 排行 [今日|本周|本月|学期] [全部] 课程时长榜
   /课表 导入 <链接/口令/JSON/文件>  导入课表
   /课表 删除                       删除自己的课表
   /课表 提醒 [分钟|关]             上课提醒（私聊）
@@ -16,7 +16,7 @@
   /课表 作息 [1 08:00-08:45 ...]   查看/修改个人作息
   /课表 请假 [日期/范围] [原因]     登记请假
   /课表 销假 [日期]                取消请假
-  /课表 调课 [课程] A B [互换]      按日期调课
+  /课表 调课 [课程] A B [互换]      调课；撤销 [日期] / 清空
   /课表 调休 [日期] [周几|清]       查看节假日/设置补班
   /课表 帮助
 
@@ -66,6 +66,7 @@ try:
     )
     from .schedule_lite_core.service import (
         STATUS_EMOJI,
+        RANK_MODE_LABEL,
         STATUS_LABEL,
         day_courses,
         day_entries,
@@ -103,6 +104,7 @@ except ImportError:  # pragma: no cover - AstrBot 以脚本方式加载时
     )
     from schedule_lite_core.service import (
         STATUS_EMOJI,
+        RANK_MODE_LABEL,
         STATUS_LABEL,
         day_courses,
         day_entries,
@@ -129,7 +131,7 @@ def _safe_int(value, default: int = 0) -> int:
 HELP_TEXT = """📚 课表指令
 /课表 [明天|周一|9/1] [@某人]  查看课表
 /课表 在上                    群友现在在上什么课
-/课表 排行 [今日|本周|学期] [全部]
+/课表 排行 [今日|本周|本月|学期] [全部]
 /课表 导入 <链接/口令/JSON/文件>
 /课表 删除
 /课表 提醒 [分钟|关]           私聊订阅上课提醒
@@ -139,7 +141,7 @@ HELP_TEXT = """📚 课表指令
 /课表 学期 2026-09-07           修正第 1 周周一
 /课表 请假 [日期/范围] [原因]   登记请假
 /课表 销假 [日期]               取消请假
-/课表 调课 [课程] A B [互换]    把 A 的课调到 B
+/课表 调课 [课程] A B [互换]    调课；撤销 [日期] / 清空
 /课表 调休 [日期] [周几|清]     查看节假日/设置补班
 /课表 帮助
 
@@ -166,6 +168,7 @@ SUBCOMMANDS = {
 RANK_MODES = {
     "今日": "today", "今天": "today", "today": "today",
     "本周": "week", "这周": "week", "周": "week", "week": "week",
+    "本月": "month", "这月": "month", "这个月": "month", "month": "month",
     "学期": "term", "本学期": "term", "整学期": "term", "term": "term",
 }
 
@@ -174,7 +177,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.3.0",
+    "v1.4.0",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -191,6 +194,8 @@ class ScheduleLitePlugin(Star):
         self._notify_task: asyncio.Task | None = None
         self._holiday_task: asyncio.Task | None = None
         self._holidays: dict[int, HolidayCalendar] = {}
+        self._makeup_text: str | None = None
+        self._makeup_values: dict[str, int] = {}
         self._broadcast_state: dict[str, dict[str, str]] = {}
         # 按用户缓存当天的课程快照和分钟级状态，多个群查询可直接复用
         self._day_cache: dict[tuple[int, str, int], list] = {}
@@ -312,11 +317,33 @@ class ScheduleLitePlugin(Star):
             return calendar
         return None
 
+    def _makeup_map(self) -> dict[str, int]:
+        """全局补班映射，例如 `2026-10-10 周四`，个人设置优先。"""
+        text = str(self._cfg("makeup_weekday_map", "") or "").strip()
+        if text == self._makeup_text:
+            return self._makeup_values
+        today = self._now().date()
+        values: dict[str, int] = {}
+        for line in text.splitlines():
+            parts = [p for p in re.split(r"[\s,，;；]+", line.strip()) if p]
+            if len(parts) < 2:
+                continue
+            day = parse_date(parts[0]) or self._parse_cmd_date(parts[0], today)
+            weekday = parse_day(parts[1])
+            if day is not None and weekday is not None:
+                values[day.isoformat()] = weekday
+        self._makeup_text = text
+        self._makeup_values = values
+        return values
+
     def _calendar_for(self, day: date) -> HolidayCalendar | None:
         calendar = self._holidays.get(day.year)
         if calendar is None:
             calendar = self._load_holiday_cache(day.year)
-        return calendar if calendar and calendar.days else None
+        if calendar and calendar.days:
+            calendar.makeup_weekdays = self._makeup_map()
+            return calendar
+        return None
 
     async def _refresh_holidays(self, year: int, *, force: bool = False) -> None:
         if self._http is None:
@@ -463,6 +490,12 @@ class ScheduleLitePlugin(Star):
         bucket[group_id] = key
         self._save_broadcast_state()
         return True
+
+    def _release_broadcast(self, kind: str, group_id: str) -> None:
+        """发送失败时退回当天名额，下一轮检查还能重试。"""
+        bucket = self._broadcast_state.get(kind)
+        if bucket and bucket.pop(group_id, None) is not None:
+            self._save_broadcast_state()
 
     def _hide_idle_over(self) -> int:
         try:
@@ -865,7 +898,7 @@ class ScheduleLitePlugin(Star):
         if not visible:
             yield event.plain_result("本群还没有人导入课表哦。")
             return
-        mode_label = {"today": "今日", "week": "本周", "term": "本学期"}[mode]
+        mode_label = RANK_MODE_LABEL.get(mode, "本周")
         yield event.plain_result(
             format_rank(
                 visible,
@@ -1425,6 +1458,7 @@ class ScheduleLitePlugin(Star):
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(f"[{PLUGIN_NAME}] 满课榜发送失败 {group_id}: {exc}")
+                        self._release_broadcast("showcase", group_id)
 
         if recap_enabled:
             hour, minute = self._hhmm(
@@ -1471,6 +1505,7 @@ class ScheduleLitePlugin(Star):
                         )
                     except Exception as exc:  # noqa: BLE001
                         logger.warning(f"[{PLUGIN_NAME}] 周报发送失败 {group_id}: {exc}")
+                        self._release_broadcast("recap", group_id)
 
     # ---------------------------------------------------------- 请假 / 调课 / 调休
 
@@ -1583,52 +1618,30 @@ class ScheduleLitePlugin(Star):
         await self._save()
         yield event.plain_result(f"已取消 {target:%m/%d} 的请假。")
 
-    async def _h_adjust(self, event, args: str):
-        tt = self._own_tt(event)
-        if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
-            return
-        text = args.strip()
-        if text in ("清空", "清除", "撤销", "重置"):
-            count = len(tt.adjustments)
-            tt.adjustments = []
-            await self._save()
-            yield event.plain_result(f"已清空 {count} 条调课记录。")
-            return
-
-        today = self._now().date()
-        tokens = [t for t in re.split(r"\s+", text) if t]
-        swap = any(t in ("互换", "交换", "swap") for t in tokens)
-        dates, rest = self._take_dates(
-            [t for t in tokens if t not in ("互换", "交换", "swap")], today
-        )
-        if len(dates) < 2:
-            yield event.plain_result(
-                "格式：/课表 调课 [课程] 原日期 目标日期\n"
-                "例：/课表 调课 9/10 9/12（把 9/10 全部课移到 9/12）\n"
-                "　　/课表 调课 高等数学 9/10 9/12\n"
-                "　　/课表 调课 9/10 9/12 互换"
-            )
-            return
-        source_day, target_day = dates[0], dates[1]
+    def _add_adjustment(
+        self,
+        tt: Timetable,
+        source_day: date,
+        target_day: date,
+        course_filter: str = "",
+        swap: bool = False,
+    ) -> tuple[list[dict], int]:
+        """把某天的课程快照写入 adjustments；命令和 WebUI 共用。"""
         if source_day == target_day:
-            yield event.plain_result("原日期和目标日期不能是同一天。")
-            return
-        course_filter = " ".join(rest).strip()
+            raise ValueError("原日期和目标日期不能是同一天。")
         calendar = self._calendar_for(source_day)
         items = day_entries(tt, source_day, calendar)
         if course_filter:
             items = [item for item in items if course_filter in item.course.name]
         if not items:
             label = f"「{course_filter}」" if course_filter else ""
-            yield event.plain_result(f"{source_day:%m/%d} 没有{label}课程可调。")
-            return
+            raise ValueError(f"{source_day:%m/%d} 没有{label}课程可调。")
 
         snapshot = [
             {"name": item.course.name, "start": item.start, "end": item.end}
             for item in items
         ]
-        target_items: list[DayItem] = []
+        target_items = []
         if swap:
             target_calendar = self._calendar_for(target_day)
             target_items = day_entries(tt, target_day, target_calendar)
@@ -1636,17 +1649,16 @@ class ScheduleLitePlugin(Star):
                 target_items = [
                     item for item in target_items if course_filter in item.course.name
                 ]
+        created_at = self._now().isoformat(timespec="seconds")
         tt.adjustments.append(
             {
                 "from_date": source_day.isoformat(),
                 "to_date": target_day.isoformat(),
                 "course": course_filter,
                 "courses": snapshot,
-                "created_at": self._now().isoformat(timespec="seconds"),
+                "created_at": created_at,
             }
         )
-
-        swapped = 0
         if target_items:
             tt.adjustments.append(
                 {
@@ -1661,10 +1673,77 @@ class ScheduleLitePlugin(Star):
                         }
                         for item in target_items
                     ],
-                    "created_at": self._now().isoformat(timespec="seconds"),
+                    "created_at": created_at,
                 }
             )
-            swapped = len(target_items)
+        return snapshot, len(target_items)
+
+    async def _h_adjust(self, event, args: str):
+        tt = self._own_tt(event)
+        if not tt:
+            yield event.plain_result("你还没有导入课表哦。")
+            return
+        text = args.strip()
+        if text in ("清空", "清除", "重置"):
+            count = len(tt.adjustments)
+            tt.adjustments = []
+            await self._save()
+            yield event.plain_result(f"已清空 {count} 条调课记录。")
+            return
+
+        today = self._now().date()
+        if text.startswith(("撤销", "撤回", "undo")):
+            parts = text.split(maxsplit=1)
+            if len(parts) == 2:
+                target = self._parse_cmd_date(parts[1], today)
+                if target is None:
+                    yield event.plain_result("日期没看懂，示例：/课表 调课 撤销 9/10")
+                    return
+                key = target.isoformat()
+                kept = [
+                    item
+                    for item in tt.adjustments
+                    if item.get("from_date") != key and item.get("to_date") != key
+                ]
+                removed = len(tt.adjustments) - len(kept)
+                if not removed:
+                    yield event.plain_result(f"{target:%m/%d} 没有调课记录。")
+                    return
+                tt.adjustments = kept
+                await self._save()
+                yield event.plain_result(f"已撤销 {target:%m/%d} 相关的 {removed} 条调课记录。")
+                return
+            if not tt.adjustments:
+                yield event.plain_result("没有可撤销的调课记录。")
+                return
+            tt.adjustments.pop()
+            await self._save()
+            yield event.plain_result("已撤销最近一条调课记录。")
+            return
+
+        tokens = [t for t in re.split(r"\s+", text) if t]
+        swap = any(t in ("互换", "交换", "swap") for t in tokens)
+        dates, rest = self._take_dates(
+            [t for t in tokens if t not in ("互换", "交换", "swap")], today
+        )
+        if len(dates) < 2:
+            yield event.plain_result(
+                "格式：/课表 调课 [课程] 原日期 目标日期 [互换]\n"
+                "例：/课表 调课 9/10 9/12（把 9/10 全部课移到 9/12）\n"
+                "　　/课表 调课 高等数学 9/10 9/12\n"
+                "　　/课表 调课 9/10 9/12 互换\n"
+                "撤销：/课表 调课 撤销 [日期]"
+            )
+            return
+        source_day, target_day = dates[0], dates[1]
+        course_filter = " ".join(rest).strip()
+        try:
+            snapshot, swapped = self._add_adjustment(
+                tt, source_day, target_day, course_filter, swap
+            )
+        except ValueError as exc:
+            yield event.plain_result(str(exc))
+            return
         await self._save()
         names = "、".join(item["name"] for item in snapshot)
         msg = f"🔁 已把 {source_day:%m/%d} 的 {names} 调到 {target_day:%m/%d}。"
@@ -1697,6 +1776,13 @@ class ScheduleLitePlugin(Star):
             if tt.makeup_days:
                 lines.append("\n你的补班设置：")
                 for day, weekday in sorted(tt.makeup_days.items()):
+                    lines.append(
+                        f"{day} → 按周{'一二三四五六日'[weekday - 1]}课表"
+                    )
+            global_map = self._makeup_map()
+            if global_map:
+                lines.append("\n全局补班映射：")
+                for day, weekday in sorted(global_map.items()):
                     lines.append(
                         f"{day} → 按周{'一二三四五六日'[weekday - 1]}课表"
                     )
@@ -1914,6 +2000,78 @@ class ScheduleLitePlugin(Star):
             teacher=str(raw.get("teacher") or "").strip(),
         )
 
+    @staticmethod
+    def _clean_leaves(raw) -> list[dict]:
+        result = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            start = parse_date(item.get("start"))
+            if start is None:
+                continue
+            end = parse_date(item.get("end")) or start
+            if end < start:
+                start, end = end, start
+            result.append(
+                {
+                    "start": start.isoformat(),
+                    "end": end.isoformat(),
+                    "reason": str(item.get("reason") or "")[:120],
+                }
+            )
+        return result
+
+    @staticmethod
+    def _clean_adjustments(raw) -> list[dict]:
+        result = []
+        for item in raw if isinstance(raw, list) else []:
+            if not isinstance(item, dict):
+                continue
+            source = parse_date(item.get("from_date"))
+            target = parse_date(item.get("to_date"))
+            if source is None or target is None or source == target:
+                continue
+            courses = []
+            for course in item.get("courses") or []:
+                if not isinstance(course, dict):
+                    continue
+                name = str(course.get("name") or "").strip()
+                start = parse_time(course.get("start")) or ""
+                end = parse_time(course.get("end")) or ""
+                if name and start and end:
+                    courses.append({"name": name, "start": start, "end": end})
+            if not courses:
+                continue
+            result.append(
+                {
+                    "from_date": source.isoformat(),
+                    "to_date": target.isoformat(),
+                    "course": str(item.get("course") or "").strip(),
+                    "courses": courses,
+                    "created_at": str(item.get("created_at") or ""),
+                }
+            )
+        return result
+
+    @staticmethod
+    def _clean_makeup_days(raw) -> dict[str, int]:
+        result = {}
+        for key, value in (raw.items() if isinstance(raw, dict) else []):
+            day = parse_date(key)
+            weekday = _safe_int(value, 0)
+            if day is not None and 1 <= weekday <= 7:
+                result[day.isoformat()] = weekday
+        return result
+
+    @staticmethod
+    def _clean_groups(raw) -> tuple[list[str], dict[str, str]]:
+        groups = []
+        for item in raw if isinstance(raw, list) else []:
+            group_id = str(item or "").strip()
+            if group_id and group_id not in groups:
+                groups.append(group_id)
+        return groups[:50], {}
+
     async def _api_timetable_save(self):
         try:
             payload = await self._json_body()
@@ -1941,8 +2099,12 @@ class ScheduleLitePlugin(Star):
                 for course in (self._course_from_api(raw) for raw in raw_courses)
                 if course is not None
             ]
-            sections = parse_section_times(payload.get("sections")) or (
-                old.sections if old else self._fallback_sections()
+            # 在副本上改，校验失败时不会污染内存里的旧课表
+            tt = Timetable.from_dict(old.to_dict()) if old else Timetable(
+                owner_id=owner_id or key.split(":", 1)[-1]
+            )
+            tt.sections = parse_section_times(payload.get("sections")) or tt.sections or (
+                self._fallback_sections()
             )
             if not self._store_teacher():
                 for course in courses:
@@ -1950,7 +2112,6 @@ class ScheduleLitePlugin(Star):
             if not self._store_location():
                 for course in courses:
                     course.location = ""
-            tt = old or Timetable(owner_id=owner_id or key.split(":", 1)[-1])
             if owner_id:
                 tt.owner_id = owner_id
             tt.name = str(payload.get("name") or tt.name or "我的课表")
@@ -1959,9 +2120,61 @@ class ScheduleLitePlugin(Star):
             tt.total_weeks = total_weeks
             tt.timezone = str(payload.get("timezone") or tt.timezone or self._tz)
             tt.source = str(payload.get("source") or tt.source or "控制面板")
-            tt.sections = sections
             tt.courses = courses
             tt.invalidate_index()
+
+            if "leaves" in payload:
+                tt.leaves = self._clean_leaves(payload.get("leaves"))
+            if "adjustments" in payload:
+                tt.adjustments = self._clean_adjustments(payload.get("adjustments"))
+            if "makeup_days" in payload:
+                tt.makeup_days = self._clean_makeup_days(payload.get("makeup_days"))
+            if "groups" in payload:
+                tt.groups, _ = self._clean_groups(payload.get("groups"))
+            if "group_origins" in payload:
+                raw_origins = payload.get("group_origins")
+                tt.group_origins = {
+                    str(group): str(origin)
+                    for group, origin in (
+                        raw_origins.items() if isinstance(raw_origins, dict) else []
+                    )
+                    if str(group).strip() and str(origin).strip()
+                }
+                if tt.groups:
+                    tt.group_origins = {
+                        group: origin
+                        for group, origin in tt.group_origins.items()
+                        if group in tt.groups
+                    }
+            if "groups" in payload:
+                tt.group_origins = {
+                    group: origin
+                    for group, origin in tt.group_origins.items()
+                    if group in tt.groups
+                }
+
+            for raw in payload.get("new_adjustments") or []:
+                if not isinstance(raw, dict):
+                    continue
+                source = parse_date(raw.get("from_date")) or self._parse_cmd_date(
+                    str(raw.get("from_date") or ""), self._now().date()
+                )
+                target = parse_date(raw.get("to_date")) or self._parse_cmd_date(
+                    str(raw.get("to_date") or ""), self._now().date()
+                )
+                if source is None or target is None:
+                    return self._err("调课日期格式不对")
+                try:
+                    self._add_adjustment(
+                        tt,
+                        source,
+                        target,
+                        str(raw.get("course") or "").strip(),
+                        bool(raw.get("swap")),
+                    )
+                except ValueError as exc:
+                    return self._err(str(exc))
+
             self.store.put(key, tt)
             await self._save()
             return self._ok(self._tt_summary(key, tt))
@@ -2003,6 +2216,7 @@ class ScheduleLitePlugin(Star):
         "holiday_enabled",
         "holiday_api_url",
         "holiday_cache_hours",
+        "makeup_weekday_map",
     )
 
     def _settings_view(self) -> dict:
@@ -2060,6 +2274,7 @@ class ScheduleLitePlugin(Star):
             self._day_cache.clear()
             self._status_cache.clear()
             self._entries_cache.clear()
+            self._makeup_text = None
             return self._ok(self._settings_view())
         except Exception as exc:  # noqa: BLE001
             return self._err(str(exc), 500)

@@ -122,6 +122,7 @@
             <label class="setting"><span><b>启用调休判断</b><small>查询时本地生效</small></span><input type="checkbox" id="set-holiday-enabled"></label>
             <label class="setting wide"><span><b>数据源</b><small>支持 {year} 占位符</small></span><input class="input" id="set-holiday-url"></label>
             <label class="setting"><span><b>缓存小时</b><small>后台刷新间隔</small></span><input class="input short" type="number" id="set-holiday-hours"></label>
+            <label class="setting wide column"><span><b>全局补班映射</b><small>每行「日期 周几」，例如 2026-10-10 周四</small></span><textarea class="input textarea" id="set-makeup-map" rows="3" placeholder="2026-10-10 周四&#10;2027-02-20 周三"></textarea></label>
           </div>
         </div>
         <div class="save-bar"><button class="btn primary" id="save-settings">保存设置</button></div>
@@ -153,11 +154,36 @@
       </div>
       <div class="section-head compact"><div><h3>课程安排</h3></div><button class="btn ghost" id="add-course">添加一门课</button></div>
       <div id="course-editor" class="course-editor"></div>
+
+      <div class="section-head compact"><div><h3>请假记录</h3><p>日期留空不会保存</p></div><button class="btn ghost" id="add-leave">添加请假</button></div>
+      <div id="leave-editor" class="record-list"></div>
+
+      <div class="section-head compact"><div><h3>调课记录</h3><p>已有记录可删除；新增会同时写入调课快照</p></div><button class="btn ghost" id="add-adjust">添加调课</button></div>
+      <div id="adjust-existing" class="record-list"></div>
+      <div id="adjust-new" class="record-list"></div>
+
+      <div class="section-head compact"><div><h3>补班设置</h3><p>个人设置优先于全局补班映射</p></div><button class="btn ghost" id="add-makeup">添加补班</button></div>
+      <div id="makeup-editor" class="record-list"></div>
+
+      <div class="section-head compact"><div><h3>群绑定</h3><p>定时节目只发送到有 origin 的群</p></div><button class="btn ghost" id="add-group">添加群</button></div>
+      <div id="group-editor" class="record-list"></div>
       <div class="sheet-actions">
         <button class="btn danger ghost" id="delete-record">删除课表</button>
         <span class="spacer"></span>
         <button class="btn ghost" id="cancel-edit">取消</button>
         <button class="btn primary" id="save-record">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="sheet-mask" id="confirm-mask" hidden>
+    <div class="confirm-card">
+      <h3 id="confirm-title">确认操作</h3>
+      <p id="confirm-text"></p>
+      <div class="sheet-actions">
+        <span class="spacer"></span>
+        <button class="btn ghost" id="confirm-cancel" type="button">取消</button>
+        <button class="btn danger primary" id="confirm-ok" type="button">确定</button>
       </div>
     </div>
   </div>

@@ -682,3 +682,114 @@ def test_status_cache_reused_and_invalidated(plugin):
     assert plugin._status_cache == {}
     assert plugin._day_cache == {}
     assert plugin._entries_cache == {}
+
+
+def test_adjust_undo_by_date(plugin):
+    event = _import_sample(plugin)
+    asyncio.run(_collect(plugin._h_adjust(event, "9/8 9/9")))
+    assert plugin.store.get("test:10001").adjustments
+
+    out = asyncio.run(_collect(plugin._h_adjust(event, "撤销 9/9")))
+    assert "已撤销" in out[0]
+    assert plugin.store.get("test:10001").adjustments == []
+
+
+def test_makeup_map_config(plugin):
+    plugin.config["makeup_weekday_map"] = "2026-10-10 周四\n2026-10-11 周五"
+    assert plugin._makeup_map() == {"2026-10-10": 4, "2026-10-11": 5}
+
+
+def test_rank_month_label(plugin):
+    event = _Event("/课表 导入", group="g1")
+    _import_sample(plugin, event)
+    out = asyncio.run(_collect(plugin._h_rank(event, "本月 全部")))
+    assert "本月" in out[0]
+
+
+def test_broadcast_claim_released_on_failure(tmp_path):
+    import main as plugin_main
+    from schedule_lite_core.model import Course, Timetable
+
+    class _FailingContext:
+        def __init__(self):
+            self.calls = 0
+
+        async def send_message(self, origin, chain):
+            self.calls += 1
+            raise RuntimeError("send failed")
+
+    plugin_main.StarTools._dir = tmp_path
+    ctx = _FailingContext()
+    plugin = plugin_main.ScheduleLitePlugin(
+        ctx,
+        {
+            "showcase_enabled": True,
+            "showcase_time": "22:30",
+            "showcase_min_minutes": 60,
+            "showcase_min_users": 1,
+            "recap_enabled": False,
+        },
+    )
+    today = plugin._now().date()
+    tt = Timetable(
+        owner_id="1",
+        owner_name="甲",
+        term_start=(today - __import__("datetime").timedelta(days=today.isoweekday() - 1)).isoformat(),
+        total_weeks=20,
+        courses=[Course(name="课", day=today.isoweekday(), weeks=[1], start="08:00", end="14:00")],
+        groups=["g1"],
+        group_origins={"g1": "test:group:g1"},
+    )
+    plugin.store.put("test:1", tt)
+    now = plugin._now().replace(hour=22, minute=31, second=0, microsecond=0)
+
+    asyncio.run(plugin._check_scheduled_broadcasts(now))
+    assert ctx.calls == 1
+    assert plugin._broadcast_state.get("showcase", {}) == {}
+
+    asyncio.run(plugin._check_scheduled_broadcasts(now))
+    assert ctx.calls == 2
+
+
+def test_web_api_save_records(plugin):
+    import astrbot.api.web as web
+
+    key = "aiocqhttp:30001"
+    body = {
+        "platform": "aiocqhttp",
+        "owner_id": "30001",
+        "owner_name": "记录同学",
+        "name": "记录课表",
+        "term_start": "2026-09-07",
+        "total_weeks": 20,
+        "courses": [
+            {"name": "离散数学", "day": 2, "weeks": "1-16", "start": "08:00", "end": "09:40"}
+        ],
+        "leaves": [{"start": "2026-09-08", "end": "2026-09-09", "reason": "事假"}],
+        "adjustments": [],
+        "new_adjustments": [
+            {"from_date": "2026-09-08", "to_date": "2026-09-09", "course": "", "swap": False}
+        ],
+        "makeup_days": {"2026-10-10": 4},
+        "groups": ["g1"],
+        "group_origins": {"g1": "test:group:g1"},
+    }
+    web.request.body = body
+    result = asyncio.run(plugin._api_timetable_save())
+    assert result["status"] == "ok"
+    tt = plugin.store.get(key)
+    assert tt.leaves == [{"start": "2026-09-08", "end": "2026-09-09", "reason": "事假"}]
+    assert len(tt.adjustments) == 1
+    assert tt.adjustments[0]["from_date"] == "2026-09-08"
+    assert tt.makeup_days == {"2026-10-10": 4}
+    assert tt.groups == ["g1"]
+    assert tt.group_origins == {"g1": "test:group:g1"}
+
+    # 校验失败不能污染已保存的数据
+    body["new_adjustments"] = [
+        {"from_date": "2026-09-10", "to_date": "2026-09-11", "course": "", "swap": False}
+    ]
+    web.request.body = body
+    failed = asyncio.run(plugin._api_timetable_save())
+    assert isinstance(failed, tuple) and failed[1] == 400
+    assert plugin.store.get(key).adjustments == tt.adjustments
