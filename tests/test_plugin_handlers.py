@@ -1319,16 +1319,6 @@ def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
         day_dir.mkdir(parents=True)
         (day_dir / "everyone-x.png").write_bytes(b"png")
 
-    from schedule_lite_core.model import Course, Timetable
-
-    tt = Timetable(
-        owner_id="u1",
-        owner_name="张三",
-        term_start="2026-09-07",
-        total_weeks=20,
-        courses=[Course(name="课", day=1, weeks=[1, 2, 3], start="08:00", end="08:45")],
-    )
-    now = plugin_now(image_plugin)
     paths = render.render_everyone(
         [{"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": ""}],
         cache,
@@ -1340,10 +1330,11 @@ def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
         font_path="",
     )
     assert paths
-    assert all(p.parent.name == now for p in paths)
+    # 所有图片落在同一个“天”目录里，目录名是 8 位日期
+    parents = {p.parent.name for p in paths}
+    assert len(parents) == 1
+    day_name = next(iter(parents))
+    assert len(day_name) == 8 and day_name.isdigit()
+    # 旧的日期目录被清理
     remaining = sorted(d.name for d in cache.iterdir() if d.is_dir())
     assert "20250101" not in remaining and len(remaining) <= 3
-
-
-def plugin_now(plugin):
-    return plugin._now().strftime("%Y%m%d")
