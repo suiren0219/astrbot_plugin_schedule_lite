@@ -231,7 +231,6 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 | --- | --- | --- |
 | `default_total_weeks` | 20 | 数据没有总周数时使用 |
 | `timezone` | Asia/Shanghai | 课表解释时区 |
-| `store_teacher` | — | 教师字段一律不保存（固定行为） |
 | `store_location` | true | 是否保存上课地点（可保存，默认不展示） |
 | `show_location` | false | 是否在查询/状态/提醒里显示地点 |
 | `allow_group_query` | true | 允许查他人课表 |
@@ -276,6 +275,17 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 - 国务院没有公开的节假日 JSON API，插件使用 timor.tech / holiday-cn 的整理数据，
   官方临时调整时以本地缓存刷新为准
 - 图片功能依赖 Pillow 和中文字体；两者缺失时会自动退回文字，不影响导入和查询
+
+## 打包发布
+
+Release 附件和本地打包共用同一份清单：
+
+```bash
+python .github/build_zip.py astrbot_plugin_schedule_lite.zip
+```
+
+推送 `v*` tag 时，`.github/workflows/release.yml` 会校验 tag 与 `metadata.yaml`
+的 `version` 一致，然后自动打包并上传到对应 Release。
 
 ## 开发与测试
 

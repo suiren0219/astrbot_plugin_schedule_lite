@@ -326,7 +326,7 @@
         users: 0, courses: 0, groups: 0, today, weekday,
         status_counts: {},
         holiday: { name: "", off: false, workday: false, source: "" },
-        config: { store_teacher: false, store_location: true, show_location: false, everyone_image: true, help_image: true },
+        config: { store_location: true, show_location: false, everyone_image: true, help_image: true },
       };
     }
     if (path === "live") return { items: [], total: 0 };
@@ -1047,6 +1047,12 @@
       const parsed = JSON.parse(await file.text());
       if (!parsed || typeof parsed !== "object" || !parsed.users) {
         throw new Error("不是本插件的备份文件");
+      }
+      if (parsed.version != null && Number(parsed.version) !== 1) {
+        throw new Error(`备份版本不支持（version=${parsed.version}，本插件支持 1）`);
+      }
+      if (parsed.plugin && parsed.plugin !== "astrbot_plugin_schedule_lite") {
+        throw new Error("这是其他插件的备份文件");
       }
       state.restorePayload = parsed;
       const count = Object.keys(parsed.users).length;
