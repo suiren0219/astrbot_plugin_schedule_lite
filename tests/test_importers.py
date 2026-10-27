@@ -2,7 +2,7 @@ import asyncio
 import json
 from datetime import date
 
-from schedule_lite_core.importers import detect, generic, ics, shiguang, wakeup, xiaoai
+from schedule_lite_core.importers import detect, generic, ics, shiguang, wakeup
 
 
 # ---------------------------------------------------------------- WakeUp
@@ -76,65 +76,6 @@ def test_wakeup_own_time():
     friday = [c for c in result.courses if c.day == 5][0]
     assert (friday.start, friday.end) == ("19:00", "20:30")
     assert friday.start_section is None
-
-
-# ---------------------------------------------------------------- 小爱
-
-
-def test_xiaoai_token_decode():
-    token = "MTIzNDUlMjZkZXYtYWJjJTI2MTcwMDAwMDAwMDAwMCUyNjQ1Ng=="
-    creds = xiaoai.decode_token(token)
-    assert creds["userId"] == "12345"
-    assert creds["deviceId"] == "dev-abc"
-    assert creds["ctId"] == "456"
-
-
-def test_xiaoai_parse_table():
-    data = {
-        "id": 456,
-        "name": "小爱测试",
-        "setting": {
-            "presentWeek": 3,
-            "sectionTimes": [
-                {"i": 1, "s": "08:00", "e": "08:45"},
-                {"i": 2, "s": "08:55", "e": "09:40"},
-            ],
-            "extend": json.dumps({"startSemester": 1757000000000}),
-        },
-        "courses": [
-            {
-                "name": "大学英语",
-                "weeks": "1,2,3,4",
-                "day": 2,
-                "sections": "1,2",
-                "position": "B202",
-                "teacher": "李老师",
-            }
-        ],
-    }
-    result = xiaoai.parse_table(data)
-    assert result.name == "小爱测试"
-    assert result.term_start == date(2025, 9, 1)  # 2025-09-04 所在周的周一
-    assert result.courses[0].day == 2
-    assert result.courses[0].weeks == [1, 2, 3, 4]
-    assert (result.courses[0].start, result.courses[0].end) == ("08:00", "09:40")
-
-
-def test_xiaoai_without_start_date_uses_present_week():
-    from datetime import datetime
-
-    from schedule_lite_core.normalize import get_tz
-
-    data = {
-        "name": "无开学日期",
-        "setting": {"presentWeek": 3, "sectionTimes": [{"i": 1, "s": "08:00", "e": "08:45"}]},
-        "courses": [{"name": "物理", "weeks": "1-4", "day": 3, "sections": "1"}],
-    }
-    now = datetime(2026, 10, 21, 12, 0, tzinfo=get_tz("Asia/Shanghai"))
-    result = xiaoai.parse_table(data, now=now)
-    # 2026-10-21 是第 3 周 → 第 1 周从 10-05 开始
-    assert result.term_start == date(2026, 10, 5)
-    assert any("推算" in w for w in result.warnings)
 
 
 # ---------------------------------------------------------------- iCalendar
@@ -315,14 +256,11 @@ def test_detect_routes():
     assert detect.parse_text("课程,星期,开始,结束,周次\n物理,周一,08:00,09:40,1-8\n").source == "CSV 表格"
 
 
-def test_xiaoai_three_part_token():
-    import base64
+def test_xiaoai_support_removed():
+    import importlib.util
 
-    token = base64.b64encode(b"111%26dev%26456").decode()
-    creds = xiaoai.decode_token(token)
-    assert creds["userId"] == "111"
-    assert creds["deviceId"] == "dev"
-    assert creds["ctId"] == "456"
+    assert "小爱" not in detect.HELP
+    assert importlib.util.find_spec("schedule_lite_core.importers.xiaoai") is None
 
 
 def test_ics_biweekly_byday():
@@ -353,25 +291,6 @@ END:VCALENDAR
 """
     result = ics.parse_ics(text)
     assert (result.courses[0].start, result.courses[0].end) == ("14:00", "15:30")
-
-
-def test_xiaoai_real_setting_shape():
-    data = {
-        "name": "小爱真实结构",
-        "setting": {
-            "presentWeek": 2,
-            "totalWeek": 18,
-            "startSemester": "1757000000000",
-            "sectionTimes": "[{'i': 1, 's': '08:00', 'e': '08:45'}, {'i': 2, 's': '08:55', 'e': '09:40'}]",
-        },
-        "courses": [
-            {"name": "高数", "weeks": "1,2,3", "day": 1, "sections": "1,2", "position": "A1", "teacher": "张"}
-        ],
-    }
-    result = xiaoai.parse_table(data)
-    assert result.term_start == date(2025, 9, 1)
-    assert result.total_weeks == 18
-    assert (result.courses[0].start, result.courses[0].end) == ("08:00", "09:40")
 
 
 def test_ics_metadata_from_summary_and_description():

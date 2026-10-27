@@ -645,6 +645,13 @@ def render_everyone(
     _prune_day_dirs(out, day_dir.name, keep=3)
 
     page_size = max(1, min(int(page_size or 8), 20))
+    # 最后一页不足半页时，优先并页或重新均分，避免出现只放一两个人的尾页。
+    if len(entries) > page_size:
+        pages = math.ceil(len(entries) / page_size)
+        last = len(entries) - (pages - 1) * page_size
+        if pages > 1 and last * 2 < page_size:
+            merged = math.ceil(len(entries) / (pages - 1))
+            page_size = merged if merged <= 20 else math.ceil(len(entries) / pages)
     chunks = [list(entries[i : i + page_size]) for i in range(0, len(entries), page_size)]
     stamp = time.strftime("%Y%m%d%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
     paths: list[Path] = []
@@ -676,15 +683,39 @@ def render_everyone(
             )
             cx, cy = _s(76), y + _s(row_h // 2)
             radius = _s(28)
-            draw.ellipse((cx - radius, cy - radius, cx + radius, cy + radius), fill=_avatar_color(entry.get("name", "")))
-            initial = (entry.get("name") or "?")[:1]
-            initial_font = _font(bold, _s(25))
-            draw.text(
-                (cx - initial_font.getlength(initial) / 2, cy - _s(16)),
-                initial,
-                font=initial_font,
-                fill="#FFFFFF",
-            )
+            avatar_drawn = False
+            avatar_path = str(entry.get("avatar") or "")
+            if avatar_path:
+                try:
+                    with Image.open(avatar_path) as source:
+                        avatar = source.convert("RGB")
+                        side = min(avatar.size)
+                        left = (avatar.width - side) // 2
+                        top = (avatar.height - side) // 2
+                        avatar = avatar.crop((left, top, left + side, top + side))
+                        diameter = radius * 2
+                        avatar = avatar.resize((diameter, diameter), Image.LANCZOS)
+                        mask = Image.new("L", (diameter, diameter), 0)
+                        ImageDraw.Draw(mask).ellipse(
+                            (0, 0, diameter - 1, diameter - 1), fill=255
+                        )
+                        image.paste(avatar, (cx - radius, cy - radius), mask)
+                    avatar_drawn = True
+                except Exception:  # noqa: BLE001
+                    avatar_drawn = False
+            if not avatar_drawn:
+                draw.ellipse(
+                    (cx - radius, cy - radius, cx + radius, cy + radius),
+                    fill=_avatar_color(entry.get("name", "")),
+                )
+                initial = (entry.get("name") or "?")[:1]
+                initial_font = _font(bold, _s(25))
+                draw.text(
+                    (cx - initial_font.getlength(initial) / 2, cy - _s(16)),
+                    initial,
+                    font=initial_font,
+                    fill="#FFFFFF",
+                )
 
             name = _ellipsize(draw, entry.get("name", ""), _font(bold, _s(23)), _s(430))
             draw.text((_s(122), y + _s(16)), name, font=_font(bold, _s(23)), fill="#0F172A")

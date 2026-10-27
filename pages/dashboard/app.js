@@ -1,8 +1,58 @@
 (() => {
   "use strict";
 
-  const bridge = window.AstrBotPluginView || window.AstrBotPluginPage || null;
   const $ = (sel) => document.querySelector(sel);
+  const PLUGIN_NAME = "astrbot_plugin_schedule_lite";
+
+  function getBridge() {
+    if (window.AstrBotPluginPage) return window.AstrBotPluginPage;
+    if (window.AstrBotPluginView) return window.AstrBotPluginView;
+    try {
+      // iframe 场景：bridge 可能注入在父窗口，且注入时间晚于本脚本
+      if (window.parent && window.parent !== window) {
+        if (window.parent.AstrBotPluginPage) return window.parent.AstrBotPluginPage;
+        if (window.parent.AstrBotPluginView) return window.parent.AstrBotPluginView;
+      }
+    } catch (err) {
+      return null;
+    }
+    return null;
+  }
+
+  function usableBridge(bridge) {
+    return Boolean(
+      bridge
+      && typeof bridge.apiGet === "function"
+      && typeof bridge.apiPost === "function"
+    );
+  }
+
+  async function waitForBridge(timeoutMs = 8000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const bridge = getBridge();
+      if (usableBridge(bridge)) return bridge;
+      await new Promise((resolve) => setTimeout(resolve, 120));
+    }
+    return getBridge();
+  }
+
+  let cachedBridge = null;
+  let bridgeProbed = false;
+  async function ensureBridge() {
+    if (usableBridge(cachedBridge)) return cachedBridge;
+    let bridge = getBridge();
+    if (usableBridge(bridge)) {
+      cachedBridge = bridge;
+      bridgeProbed = true;
+      return cachedBridge;
+    }
+    if (bridgeProbed) return null;
+    bridgeProbed = true;
+    bridge = await waitForBridge();
+    if (usableBridge(bridge)) cachedBridge = bridge;
+    return cachedBridge;
+  }
   const THEME_KEY = "schedule-lite-theme";
   const THEME_ICON = { auto: "◐", light: "☀", dark: "☾" };
   const themeQuery = window.matchMedia
@@ -106,9 +156,10 @@
   }
 
   async function ready() {
+    const bridge = await ensureBridge();
     if (bridge) {
       try {
-        const ctx = await bridge.ready();
+        const ctx = typeof bridge.ready === "function" ? await bridge.ready() : null;
         applyTheme(readThemeMode(), contextDark(ctx));
         if (typeof bridge.onContext === "function") {
           bridge.onContext((next) => {
@@ -124,17 +175,143 @@
       }
     }
     applyTheme(readThemeMode());
-    $("#conn-text").textContent = "预览模式 · 无数据";
+    $("#conn-text").textContent = "未连接后台 · 请从 AstrBot 插件页打开";
+    $("#conn-text").title = "点击重试连接";
     $("#conn-dot").classList.add("off");
   }
 
+  function unwrapResponse(payload) {
+    if (payload && typeof payload === "object") {
+      if (payload.status === "ok" && Object.prototype.hasOwnProperty.call(payload, "data")) {
+        return payload.data;
+      }
+      if (payload.success === true && Object.prototype.hasOwnProperty.call(payload, "data")) {
+        return payload.data;
+      }
+      if (["error", "fail", "failed"].includes(String(payload.status || "").toLowerCase())) {
+        throw new Error(payload.message || payload.error || "请求失败");
+      }
+      if (payload.error) throw new Error(payload.error);
+    }
+    return payload === undefined || payload === null ? {} : payload;
+  }
+
+  function isRouteMissing(value) {
+    const text = String(
+      (value && (value.message || value.error || value.detail)) || value || ""
+    ).toLowerCase();
+    return /未找到.*路由|路由不存在|route.*not.*found|not.*found.*route|http\s*404|\b404\b/.test(text);
+  }
+
+  function endpointCandidates(path) {
+    const clean = String(path || "").replace(/^\/+/, "");
+    return [...new Set([
+      `page/${clean}`,
+      clean,
+      `/${clean}`,
+      `${PLUGIN_NAME}/page/${clean}`,
+    ])];
+  }
+
+  let endpointStyle = "";
+  async function bridgeRequest(method, path, payload) {
+    const bridge = await ensureBridge();
+    if (!bridge) throw new Error("no-bridge");
+    const candidates = endpointCandidates(path);
+    if (endpointStyle) {
+      const preferred = candidates.find((item) => item === endpointStyle);
+      if (preferred) {
+        candidates.splice(candidates.indexOf(preferred), 1);
+        candidates.unshift(preferred);
+      }
+    }
+    const errors = [];
+    for (const endpoint of candidates) {
+      try {
+        const raw = method === "GET"
+          ? await bridge.apiGet(endpoint, payload)
+          : await bridge.apiPost(endpoint, payload || {});
+        if (isRouteMissing(raw)) {
+          errors.push(String((raw && (raw.message || raw.error)) || "未找到页面 API 路由"));
+          continue;
+        }
+        endpointStyle = endpoint;
+        return unwrapResponse(raw);
+      } catch (err) {
+        if (isRouteMissing(err)) {
+          errors.push(String((err && err.message) || err));
+          continue;
+        }
+        throw err;
+      }
+    }
+    throw new Error(errors[0] || "未找到页面 API 路由，请确认插件已启用并重载");
+  }
+
+  function markHttpConnected() {
+    if (!usableBridge(cachedBridge)) {
+      $("#conn-text").textContent = "已连接（HTTP）";
+      $("#conn-dot").classList.remove("off");
+    }
+  }
+
+  async function httpRequest(method, path, payload) {
+    if (window.location.protocol === "file:") throw new Error("file:// 无法直连后台");
+    const clean = String(path || "").replace(/^\/+/, "");
+    const url = new URL(`/api/plug/${PLUGIN_NAME}/page/${clean}`, window.location.origin);
+    const options = {
+      method,
+      credentials: "same-origin",
+      headers: {},
+    };
+    if (method === "GET") {
+      Object.entries(payload || {}).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== "") {
+          url.searchParams.set(key, value);
+        }
+      });
+    } else {
+      options.headers["Content-Type"] = "application/json";
+      options.body = JSON.stringify(payload || {});
+    }
+    const response = await fetch(url.toString(), options);
+    const text = await response.text();
+    let raw = {};
+    if (text) {
+      try {
+        raw = JSON.parse(text);
+      } catch (err) {
+        throw new Error(response.ok ? "后台返回的不是 JSON" : `HTTP ${response.status}`);
+      }
+    }
+    if (!response.ok) {
+      if (raw && (raw.message || raw.error)) throw new Error(raw.message || raw.error);
+      throw new Error(`HTTP ${response.status}`);
+    }
+    return unwrapResponse(raw);
+  }
+
   async function apiGet(path, params = {}) {
-    if (!bridge) return demo(path, params);
-    return bridge.apiGet(`page/${path}`, params);
+    if (usableBridge(await ensureBridge())) return bridgeRequest("GET", path, params);
+    try {
+      const data = await httpRequest("GET", path, params);
+      markHttpConnected();
+      return data;
+    } catch (err) {
+      console.warn("[schedule-lite] HTTP 直连失败，使用预览数据", err);
+      return demo(path, params);
+    }
   }
   async function apiPost(path, body = {}) {
-    if (!bridge) return demo(path, body);
-    return bridge.apiPost(`page/${path}`, body);
+    if (usableBridge(await ensureBridge())) return bridgeRequest("POST", path, body);
+    try {
+      const data = await httpRequest("POST", path, body);
+      markHttpConnected();
+      return data;
+    } catch (err) {
+      console.warn("[schedule-lite] HTTP 直连保存失败", err);
+      return demo(path, body);
+    }
   }
 
   /* ---------------------------------------------------------------- demo */
@@ -157,7 +334,7 @@
     if (path === "timetable") return { ...blankRecord(), key: (body && body.key) || "" };
     if (path === "settings") {
       return {
-        store_teacher: false, store_location: false, everyone_image: true, help_image: true,
+        store_teacher: false, store_location: false, everyone_image: true, avatar_enabled: true, help_image: true,
         everyone_page_size: 8, everyone_hide_idle_over: 12,
         showcase_enabled: false, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
@@ -169,17 +346,15 @@
     if (path === "holidays") {
       return { year: now.getFullYear(), source: "", updated_at: "", days: [] };
     }
-    if (path === "timetable/save") return { ...(body || {}), key: (body && body.key) || "preview" };
-    if (path === "timetable/delete") return { deleted: (body && body.key) || "" };
+    if (path === "timetable/save") throw new Error("未连接 AstrBot 后台，保存不会生效；请从插件控制台打开");
+    if (path === "timetable/delete") throw new Error("未连接 AstrBot 后台，删除不会生效；请从插件控制台打开");
     if (path === "import") throw new Error("预览模式不支持导入，请连接 AstrBot 后台");
     if (path === "backup") throw new Error("预览模式不支持备份，请连接 AstrBot 后台");
     if (path === "restore") throw new Error("预览模式不支持恢复，请连接 AstrBot 后台");
     if (path === "events") return { items: [] };
-    if (path === "events/save") return body || {};
-    if (path === "settings/save") return body || {};
-    if (path === "holidays/refresh") {
-      return { year: now.getFullYear(), source: "", updated_at: "", count: 0 };
-    }
+    if (path === "events/save") throw new Error("未连接 AstrBot 后台，重要日期不会保存");
+    if (path === "settings/save") throw new Error("未连接 AstrBot 后台，设置不会保存");
+    if (path === "holidays/refresh") throw new Error("未连接 AstrBot 后台，无法刷新节假日");
     return {};
   }
 
@@ -222,6 +397,12 @@
     }
   }
 
+  function avatarTag(name, url) {
+    const initial = esc((name || "?").slice(0, 1));
+    if (!url) return `<span class="avatar">${initial}</span>`;
+    return `<span class="avatar"><b>${initial}</b><img src="${esc(url)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.remove()"></span>`;
+  }
+
   async function loadLive() {
     try {
       const data = await apiGet("live");
@@ -229,7 +410,7 @@
       $("#live-list").innerHTML = items.length
         ? items.map((item) => `
           <div class="live-row">
-            <span class="avatar">${esc((item.name || "?").slice(0, 1))}</span>
+            ${avatarTag(item.name, item.avatar)}
             <div class="live-main"><b>${esc(item.name)}</b><small>${esc(item.main || "")}${item.sub ? " · " + esc(item.sub) : ""}</small></div>
             <span class="pill t${item.type}">${esc(item.label)}</span>
           </div>`).join("")
@@ -559,7 +740,7 @@
       await apiPost("timetable/save", payload);
       toast("已保存");
       closeEditor();
-      loadRecords();
+      await Promise.all([loadRecords(), loadOverview()]);
     } catch (err) {
       toast(`保存失败：${err.message}`);
     }
@@ -679,6 +860,7 @@
       set("#set-store-teacher", "store_teacher");
       set("#set-store-location", "store_location");
       set("#set-everyone-image", "everyone_image");
+      set("#set-avatar", "avatar_enabled");
       set("#set-help-image", "help_image");
       set("#set-hide-idle", "everyone_hide_idle_over");
       set("#set-page-size", "everyone_page_size");
@@ -745,6 +927,7 @@
       store_teacher: $("#set-store-teacher").checked,
       store_location: $("#set-store-location").checked,
       everyone_image: $("#set-everyone-image").checked,
+      avatar_enabled: $("#set-avatar").checked,
       help_image: $("#set-help-image").checked,
       everyone_hide_idle_over: num("#set-hide-idle"),
       everyone_page_size: num("#set-page-size"),
@@ -852,6 +1035,10 @@
     loadRecords.timer = setTimeout(loadRecords, 220);
   });
   $("#add-record").addEventListener("click", () => openEditor(""));
+  $("#refresh-records").addEventListener("click", () => {
+    loadRecords();
+    loadOverview();
+  });
   $("#import-pick").addEventListener("click", () => $("#import-file").click());
   $("#import-file").addEventListener("change", onImportFile);
   $("#import-submit").addEventListener("click", importData);
@@ -907,6 +1094,14 @@
   $("#save-settings").addEventListener("click", saveSettings);
 
   $("#theme-toggle").addEventListener("click", cycleTheme);
+  $("#conn-text").addEventListener("click", async () => {
+    if (!usableBridge(cachedBridge)) {
+      cachedBridge = null;
+      bridgeProbed = false;
+      await ready();
+      switchView(state.view);
+    }
+  });
   applyTheme(readThemeMode());
   if (themeQuery) {
     const onSystemTheme = () => {
