@@ -9,7 +9,7 @@
     "description": "🕘 默认作息（导入数据没有作息时兜底）",
     "type": "template_list",
     "default": [],
-    "hint": "小爱/WakeUp/拾光自带作息时优先用数据里的；只有节次没有时间时才用这里。留空使用内置 12 节作息。",
+    "hint": "WakeUp/拾光/Nexio 自带作息时优先用数据里的；只有节次没有时间时才用这里。留空使用内置 12 节作息。",
     "templates": {
       "section": {
         "name": "一节作息",
@@ -83,7 +83,7 @@
     "description": "🌐 允许联网导入",
     "type": "bool",
     "default": true,
-    "hint": "关闭后只能导入 JSON/ICS/CSV 文本或文件，不能读取小爱/WakeUp/ICS 链接。"
+    "hint": "关闭后只能导入 JSON/ICS/CSV 文本或文件，不能读取 WakeUp/Nexio 口令或 ICS 链接。"
   },
   "allow_private_network": {
     "description": "🏠 允许访问内网地址",
@@ -129,6 +129,12 @@
     "type": "bool",
     "default": true,
     "hint": "开启后 /课表 在上 发送状态卡片图片；关闭或生成失败时自动退回文字版。"
+  },
+  "avatar_enabled": {
+    "description": "🖼️ 群友状态使用 QQ 头像",
+    "type": "bool",
+    "default": true,
+    "hint": "状态卡片优先拉取 QQ 头像并缓存 30 天；非数字用户 ID、无网络或头像失效时自动回退首字母。"
   },
   "image_width": {
     "description": "📐 图片宽度（像素）",

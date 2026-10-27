@@ -350,7 +350,7 @@ def parse_section_times(value: Any) -> list[Section]:
             try:
                 return parse_section_times(json.loads(text))
             except (TypeError, ValueError):
-                # 小爱课程的 sectionTimes 是 Python repr 字符串（单引号），不是 JSON
+                # 兼容 Python repr 形式的作息（单引号）
                 try:
                     return parse_section_times(ast.literal_eval(text))
                 except (ValueError, SyntaxError):
@@ -441,7 +441,7 @@ def parse_date(value: Any) -> date | None:
     if not text:
         return None
     if text.isdigit() and len(text) >= 10:
-        # 字符串形式的时间戳（小爱课表的 startSemester 是 13 位毫秒字符串）
+        # 字符串形式的 Unix 时间戳
         return parse_date(int(text))
     text = text.replace("：", ":")
     m = re.match(r"^(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})", text)
@@ -573,7 +573,6 @@ def normalize_courses(
 
 def describe_source(kind: str) -> str:
     return {
-        "xiaoai": "小爱课程表",
         "wakeup": "WakeUp 课程表",
         "ics": "iCalendar",
         "shiguang": "拾光课程表",

@@ -390,13 +390,35 @@ def test_term_fix(plugin):
     assert "2026/09/07" in view[0]
 
 
-def test_help_sends_forward_images(image_plugin, tmp_path):
+def test_help_index_lists_categories(plugin):
+    import main as plugin_main
+
+    event = _Event()
+    out = asyncio.run(_collect(plugin._h_help(event, "")))
+    assert out == [plugin_main.HELP_INDEX_TEXT]
+    for title in ("导入", "查询", "请假", "状态", "设置", "面板", "常见", "全部"):
+        assert title in out[0]
+    assert plugin_main.ISSUE_URL in out[0]
+    assert "/issues" in out[0]
+
+
+def test_help_category_markdown_is_extracted(plugin):
+    assert plugin._help_category("入门") == "导入"
+    assert plugin._help_category("调休") == "请假"
+    assert plugin._help_category("webui") == "面板"
+    markdown = plugin._help_markdown("请假")
+    assert "请假 / 销假" in markdown
+    assert "调课" in markdown
+    assert "WebUI 控制台" not in markdown
+
+
+def test_help_sends_category_images(image_plugin, tmp_path):
     from schedule_lite_core import render
 
     if not render.available():
         pytest.skip("本机没有可用的中文字体")
     event = _Event()
-    out = asyncio.run(_collect(image_plugin._h_help(event, "")))
+    out = asyncio.run(_collect(image_plugin._h_help(event, "全部")))
     assert out == []  # 走图片路径，不再发文字
     assert event.sent, "应该发送合并转发消息"
     chain = event.sent[0]
@@ -405,6 +427,46 @@ def test_help_sends_forward_images(image_plugin, tmp_path):
     assert (tmp_path / "help" / "help.md").is_file()
     pages = list((tmp_path / "help").glob("help-*.png"))
     assert len(pages) >= 2
+
+
+def test_help_sends_single_category_image(image_plugin, tmp_path):
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    event = _Event()
+    out = asyncio.run(_collect(image_plugin._h_help(event, "导入")))
+    assert out == []
+    assert event.sent
+    assert (tmp_path / "help" / "help-导入.md").is_file()
+
+
+def test_query_without_timetable_shows_onboarding(plugin):
+    event = _Event()
+    out = asyncio.run(_collect(plugin._h_query(event, "")))
+    assert out
+    assert "绑定课表" in out[0]
+    assert "/课表 导入" in out[0]
+
+
+def test_avatar_cache_and_fallback(plugin, tmp_path):
+    from schedule_lite_core.model import Timetable
+
+    avatar_dir = tmp_path / "cache" / "avatars"
+    avatar_dir.mkdir(parents=True)
+    cached = avatar_dir / "123456.png"
+    cached.write_bytes(b"x" * 1024)
+
+    tt = Timetable(owner_id="123456", owner_name="张三")
+    paths = asyncio.run(plugin._avatar_paths([tt]))
+    assert paths["123456"] == str(cached)
+    entries = [{"owner_id": "123456", "name": "张三"}]
+    asyncio.run(plugin._attach_avatars(entries, [tt]))
+    assert entries[0]["avatar"] == str(cached)
+
+    assert plugin._qq_number("123456") == "123456"
+    assert plugin._avatar_url("123456").endswith("nk=123456&s=100")
+    assert plugin._avatar_url("not-a-qq") == ""
 
 
 def test_everyone_sends_image(image_plugin, tmp_path):
@@ -1306,6 +1368,25 @@ def test_single_image_sent_directly(image_plugin):
     assert event.sent
     first = event.sent[0].chain[0]
     assert not hasattr(first, "nodes"), "单张图片不应套合并转发"
+
+
+def test_render_merges_half_empty_last_page(image_plugin, tmp_path):
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    entries = [
+        {"name": f"同学{i}", "type": 1, "label": "进行中", "main": "课", "sub": ""}
+        for i in range(9)
+    ]
+    paths = render.render_everyone(
+        entries,
+        tmp_path / "cache" / "everyone",
+        page_size=8,
+        width=900,
+        font_path="",
+    )
+    assert len(paths) == 1, "9 人时不应拆出只有 1 人的第二页"
 
 
 def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
