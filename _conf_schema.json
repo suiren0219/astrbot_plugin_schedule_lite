@@ -22,17 +22,17 @@
     "default": "Asia/Shanghai",
     "hint": "课表时间按这个时区解释；iCalendar 里的 UTC/TZID 时间会转换到这里。"
   },
-  "store_teacher": {
-    "description": "👤 保存并显示任课教师",
-    "type": "bool",
-    "default": false,
-    "hint": "默认关闭：导入时直接丢弃教师字段，查询、导出和提醒里都不会出现。"
-  },
   "store_location": {
-    "description": "📍 保存并显示上课地点",
+    "description": "📍 保存上课地点",
+    "type": "bool",
+    "default": true,
+    "hint": "地点可以保存，但默认不在查询、导出和提醒里显示；是否显示由下面的「显示上课地点」控制。"
+  },
+  "show_location": {
+    "description": "🏫 显示上课地点",
     "type": "bool",
     "default": false,
-    "hint": "默认关闭：导入时直接丢弃教室/地点字段，查询、导出和提醒里都不会出现。打开后需要重新导入课表才会补回地点。"
+    "hint": "默认关闭：查询课表、群友状态和提醒里都不显示地点。打开后才显示已保存的地点。"
   },
   "allow_group_query": {
     "description": "👥 允许在群里查看他人课表",

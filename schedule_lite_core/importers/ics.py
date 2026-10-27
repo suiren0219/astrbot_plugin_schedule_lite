@@ -695,7 +695,12 @@ def parse_ics(
         sections=[],
         courses=courses,
         warnings=warnings,
-        meta={"events": len(events), "calendar": cal_name},
+        # ICS 没有「学期第 1 周」字段，这里的开学日期是按最早一节课推算的
+        meta={
+            "events": len(events),
+            "calendar": cal_name,
+            "term_start_guessed": True,
+        },
         fallback_sections=fallback_sections,
         default_total_weeks=default_total_weeks,
         store_teacher=store_teacher,

@@ -504,8 +504,10 @@ def test_avatar_cache_and_fallback(plugin, tmp_path):
     paths = asyncio.run(plugin._avatar_paths([tt]))
     assert paths["123456"] == str(cached)
     entries = [{"owner_id": "123456", "name": "张三"}]
-    asyncio.run(plugin._attach_avatars(entries, [tt]))
-    assert entries[0]["avatar"] == str(cached)
+    attached = asyncio.run(plugin._attach_avatars(entries, [tt]))
+    assert attached[0]["avatar"] == str(cached)
+    # 原列表来自状态缓存，不应被写入 avatar
+    assert "avatar" not in entries[0]
 
     assert plugin._qq_number("123456") == "123456"
     assert plugin._avatar_url("123456").endswith("nk=123456&s=100")
@@ -557,9 +559,11 @@ def test_scrub_privacy_clears_historical_data(plugin):
 
     assert plugin._scrub_privacy() is True
     course = plugin.store.get("old-user").courses[0]
-    assert course.teacher == ""
-    assert course.location == ""
+    assert course.teacher == ""  # 教师一律不保存
+    assert course.location == "A101"  # 地点可以保存
     assert plugin._scrub_privacy() is False
+    # 默认不展示地点
+    assert plugin._show_location() is False
 
 
 def test_web_api_crud(plugin):
@@ -592,9 +596,9 @@ def test_web_api_crud(plugin):
     assert tt is not None
     assert tt.owner_name == "王五"
     assert tt.courses[0].name == "离散数学"
-    # 默认隐私：面板写入也会丢弃教师和地点
+    # 教师一律丢弃；地点保留但不默认展示
     assert tt.courses[0].teacher == ""
-    assert tt.courses[0].location == ""
+    assert tt.courses[0].location == "A101"
     assert tt.term_start == "2026-09-07"
 
     web.request.args = {"key": key}
@@ -616,8 +620,8 @@ def test_web_api_settings(plugin):
     import astrbot.api.web as web
 
     web.request.body = {
-        "store_teacher": True,
-        "store_location": False,
+        "store_location": True,
+        "show_location": True,
         "everyone_hide_idle_over": 6,
         "showcase_enabled": True,
         "showcase_time": "23:10",
@@ -625,7 +629,8 @@ def test_web_api_settings(plugin):
     }
     result = asyncio.run(plugin._api_settings_save())
     assert result["status"] == "ok"
-    assert plugin.config["store_teacher"] is True
+    assert plugin.config["show_location"] is True
+    assert plugin.config["store_location"] is True
     assert plugin.config["showcase_time"] == "23:10"
     assert plugin.config["recap_mode"] == "month"
 
@@ -987,7 +992,7 @@ def test_web_api_import(plugin):
     assert tt.owner_name == "导入同学"
     assert tt.courses[0].name == "高等数学"
     assert tt.courses[0].teacher == ""
-    assert tt.courses[0].location == ""
+    assert tt.courses[0].location == "A101"
 
 
 def test_web_api_import_requires_fields(plugin):
@@ -1321,6 +1326,72 @@ def test_events_api_and_countdown(plugin):
     assert "CET-6" in outs[0]
 
 
+def test_import_preserves_leaves_adjustments_makeup(plugin):
+    from schedule_lite_core.model import Timetable
+
+    event = _import_sample(plugin)
+    key = plugin._user_key(event)
+    tt = plugin.store.get(key)
+    tt.leaves = [{"start": "2026-09-10", "end": "2026-09-10", "reason": "病假"}]
+    tt.adjustments = [
+        {"from_date": "2026-09-11", "to_date": "2026-09-12", "course": "", "swap": False, "courses": []}
+    ]
+    tt.makeup_days = {"2026-10-10": 4}
+    asyncio.run(plugin._save())
+
+    asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    again = plugin.store.get(key)
+    assert again.leaves and again.leaves[0]["reason"] == "病假"
+    assert again.adjustments and again.adjustments[0]["to_date"] == "2026-09-12"
+    assert again.makeup_days == {"2026-10-10": 4}
+
+
+def test_teacher_always_dropped_location_kept(plugin):
+    event = _import_sample(plugin)
+    tt = plugin.store.get(plugin._user_key(event))
+    assert all(c.teacher == "" for c in tt.courses)
+    assert any(c.location for c in tt.courses)
+    assert plugin._show_location() is False
+
+
+def test_ics_without_term_start_asks_for_it(plugin):
+    ics = """BEGIN:VCALENDAR
+BEGIN:VEVENT
+UID:x
+SUMMARY:高等数学
+DTSTART;TZID=Asia/Shanghai:20260907T080000
+DTEND;TZID=Asia/Shanghai:20260907T094000
+RRULE:FREQ=WEEKLY;COUNT=8
+END:VEVENT
+END:VCALENDAR
+"""
+    event = _Event()
+    out = asyncio.run(_collect(plugin._h_import(event, ics)))
+    tt = plugin.store.get(plugin._user_key(event))
+    assert tt.term_guessed is True
+    assert "/课表 学期" in out[0]
+
+    query = asyncio.run(_collect(plugin._h_query(event, "")))
+    assert any("推算" in item for item in query)
+
+    asyncio.run(_collect(plugin._h_term(event, "2026-09-07")))
+    assert plugin.store.get(plugin._user_key(event)).term_guessed is False
+
+
+def test_countdown_prefers_holiday(plugin):
+    from schedule_lite_core.holiday import HolidayCalendar
+
+    today = plugin._now().date()
+    calendar = HolidayCalendar(
+        year=today.year,
+        days={today.replace(month=12, day=25).isoformat(): {"name": "寒假", "off": True}},
+    )
+    plugin._holidays[today.year] = calendar
+    out = asyncio.run(_collect(plugin._h_countdown(_Event())))
+    assert "假期倒计时" in out[0]
+    assert "寒假" in out[0]
+
+
 def test_backup_and_restore_roundtrip(plugin):
     import astrbot.api.web as web
 
@@ -1338,6 +1409,77 @@ def test_backup_and_restore_roundtrip(plugin):
     assert result["data"]["restored"] == 1
     assert plugin.store.get("test:10001").courses
     assert plugin._events == []
+
+
+def test_early_push_skips_abandoned_and_holiday(tmp_path):
+    import main as plugin_main
+    from datetime import timedelta
+
+    from schedule_lite_core.holiday import HolidayCalendar
+    from schedule_lite_core.model import Course, Timetable
+
+    class _Ctx:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, origin, chain):
+            self.sent.append((origin, chain))
+
+    plugin_main.StarTools._dir = tmp_path
+    ctx = _Ctx()
+    plugin = plugin_main.ScheduleLitePlugin(
+        ctx,
+        {
+            "early_enabled": True,
+            "early_time": "21:30",
+            "early_max_start": "08:00",
+            "early_at": False,
+            "showcase_enabled": False,
+            "recap_enabled": False,
+        },
+    )
+    now = plugin._now()
+    tomorrow = now.date() + timedelta(days=1)
+    monday = now.date() - timedelta(days=now.isoweekday() - 1)
+
+    def make_tt(uid, name):
+        return Timetable(
+            owner_id=uid,
+            owner_name=name,
+            term_start=monday.isoformat(),
+            total_weeks=20,
+            courses=[Course(name=f"课{uid}", day=tomorrow.isoweekday(), weeks=[1, 2], start="08:00", end="09:40")],
+            groups=["g1"],
+            group_origins={"g1": "test:group:g1"},
+        )
+
+    plugin.store.put("t:1", make_tt("1", "请假同学"))
+    tt2 = make_tt("2", "正常同学")
+    plugin.store.put("t:2", tt2)
+    plugin.store.get("t:1").leaves = [
+        {"start": tomorrow.isoformat(), "end": tomorrow.isoformat(), "reason": "病假"}
+    ]
+    plugin._claim_broadcast  # noqa: B018 确保属性存在
+
+    # 明天放假时整轮跳过
+    off_calendar = HolidayCalendar(
+        year=tomorrow.year,
+        days={tomorrow.isoformat(): {"name": "测试假期", "off": True}},
+    )
+    plugin._calendar_for = lambda day: off_calendar
+    now21 = now.replace(hour=21, minute=31, second=0, microsecond=0)
+    asyncio.run(plugin._check_scheduled_broadcasts(now21))
+    assert ctx.sent == []
+
+    # 非假期时只推送没请假的人，且地点默认不显示
+    plugin._calendar_for = lambda day: None
+    plugin._broadcast_state.clear()
+    asyncio.run(plugin._check_scheduled_broadcasts(now21))
+    assert len(ctx.sent) == 1
+    text = ctx.sent[0][1].text
+    assert "正常同学" in text
+    assert "请假同学" not in text
+    assert "@" not in text.split("正常同学")[-1].splitlines()[0]
 
 
 def test_early_push_tomorrow_early_birds(tmp_path):

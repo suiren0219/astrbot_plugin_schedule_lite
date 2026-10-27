@@ -129,10 +129,10 @@
 
       <section id="view-settings" class="view" hidden>
         <div class="card">
-          <div class="section-head"><div><h2>展示与隐私</h2><p>关闭教师/地点后，导入会直接丢弃</p></div></div>
+          <div class="section-head"><div><h2>展示与隐私</h2><p>教师一律不保存；地点可保存但默认不显示</p></div></div>
           <div class="setting-grid">
-            <label class="setting"><span><b>保存任课教师</b><small>默认关闭</small></span><input type="checkbox" id="set-store-teacher"></label>
-            <label class="setting"><span><b>保存上课地点</b><small>默认关闭</small></span><input type="checkbox" id="set-store-location"></label>
+            <label class="setting"><span><b>保存上课地点</b><small>仅存本地，不显示</small></span><input type="checkbox" id="set-store-location"></label>
+            <label class="setting"><span><b>显示上课地点</b><small>默认关闭</small></span><input type="checkbox" id="set-show-location"></label>
             <label class="setting"><span><b>群友状态图片</b><small>失败自动退回文字</small></span><input type="checkbox" id="set-everyone-image"></label>
             <label class="setting"><span><b>QQ 头像</b><small>失败回退首字母</small></span><input type="checkbox" id="set-avatar"></label>
             <label class="setting wide"><span><b>帮助合并转发图片</b><small>/课表 帮助</small></span><input type="checkbox" id="set-help-image"></label>
@@ -166,7 +166,7 @@
           </div>
         </div>
         <div class="card">
-          <div class="section-head"><div><h2>重要日期</h2><p>四六级、期末等倒计时，/课表 倒计时 可查，早八推送附带</p></div><button class="btn ghost" id="add-event">添加日期</button></div>
+          <div class="section-head"><div><h2>重要日期</h2><p>假期倒计时自动读取节假日缓存；这里补充四六级等日期</p></div><button class="btn ghost" id="add-event">添加日期</button></div>
           <div id="event-editor" class="record-list"></div>
         </div>
         <div class="card">
