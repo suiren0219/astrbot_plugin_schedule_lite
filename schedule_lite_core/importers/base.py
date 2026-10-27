@@ -33,6 +33,10 @@ class ImportResult:
     dropped: int = 0
     warnings: list[str] = field(default_factory=list)
     meta: dict[str, Any] = field(default_factory=dict)
+    # 通用 JSON 导出携带的个人记录，仅换设备/新绑定时的首次导入会采用
+    leaves: list[dict[str, Any]] = field(default_factory=list)
+    adjustments: list[dict[str, Any]] = field(default_factory=list)
+    makeup_days: dict[str, int] = field(default_factory=dict)
 
 
 def build_result(
@@ -51,6 +55,9 @@ def build_result(
     store_teacher: bool = False,
     store_location: bool = False,
     tz: str = "Asia/Shanghai",
+    leaves: list[dict[str, Any]] | None = None,
+    adjustments: list[dict[str, Any]] | None = None,
+    makeup_days: dict[str, int] | None = None,
 ) -> ImportResult:
     """把任意来源的课程整理成统一的 ImportResult。"""
     warns = list(warnings or [])
@@ -112,4 +119,7 @@ def build_result(
         dropped=dropped,
         warnings=warns,
         meta=meta_data,
+        leaves=list(leaves or []),
+        adjustments=list(adjustments or []),
+        makeup_days=dict(makeup_days or {}),
     )
