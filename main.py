@@ -230,7 +230,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.8",
+    "v1.5.9",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1250,6 +1250,14 @@ class ScheduleLitePlugin(Star):
                     tt.notes[course_name] = note
                 else:
                     removed_notes.append(course_name)
+        else:
+            # 全新绑定：通用 JSON 里携带的请假/调课/补班记录直接带上（换设备迁移）
+            if result.leaves and not tt.leaves:
+                tt.leaves = list(result.leaves)
+            if result.adjustments and not tt.adjustments:
+                tt.adjustments = list(result.adjustments)
+            if result.makeup_days and not tt.makeup_days:
+                tt.makeup_days = dict(result.makeup_days)
         if group_id:
             tt.remember_group(group_id, origin)
         raw_source = self._archive_raw_import(key, raw)

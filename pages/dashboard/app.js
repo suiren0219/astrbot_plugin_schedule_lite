@@ -495,14 +495,49 @@
   }
 
   function renderCourses() {
-    $("#course-editor").innerHTML = state.courses.length
+    const editor = $("#course-editor");
+    editor.innerHTML = state.courses.length
       ? state.courses.map(courseRow).join("")
       : '<div class="empty">还没有课程，点「添加一门课」</div>';
     document.querySelectorAll("#course-editor .remove").forEach((btn) => {
       btn.addEventListener("click", () => {
         btn.closest(".course-row").remove();
+        updateCourseCount();
       });
     });
+    updateCourseCount();
+    applyCourseFilter();
+  }
+
+  function updateCourseCount() {
+    const total = document.querySelectorAll("#course-editor .course-row").length;
+    $("#course-count").textContent = total ? `${total} 条安排` : "";
+  }
+
+  function applyCourseFilter() {
+    const editor = $("#course-editor");
+    const query = ($("#course-filter").value || "").trim().toLowerCase();
+    let visible = 0;
+    editor.querySelectorAll(".course-row").forEach((row) => {
+      const name = row.querySelector('[data-field="name"]')?.value.trim().toLowerCase() || "";
+      const hit = !query || name.includes(query);
+      row.style.display = hit ? "" : "none";
+      if (hit) visible += 1;
+    });
+    const empty = editor.querySelector(".empty");
+    if (empty) empty.style.display = query ? "none" : "";
+    let hint = editor.querySelector(".filter-empty");
+    if (query && !visible) {
+      if (!hint) {
+        hint = document.createElement("div");
+        hint.className = "empty filter-empty";
+        editor.appendChild(hint);
+      }
+      hint.textContent = "没有匹配的课程（保存不受过滤影响）";
+      hint.style.display = "";
+    } else if (hint) {
+      hint.remove();
+    }
   }
 
   function leaveRow(item = {}) {
@@ -715,6 +750,7 @@
       $("#f-sections").value = formatSections(sections);
       state.courses = Array.isArray(data.courses) ? data.courses.slice() : [];
       state.adjustments = Array.isArray(data.adjustments) ? data.adjustments.slice() : [];
+      $("#course-filter").value = "";
       renderCourses();
       renderLeaves(Array.isArray(data.leaves) ? data.leaves : []);
       renderAdjustments(state.adjustments);
@@ -1116,7 +1152,15 @@
     wrap.insertAdjacentHTML("beforeend", courseRow({ day: 1, weeks: "1-16", start_section: 1, end_section: 2 }));
     wrap.lastElementChild.querySelector(".remove").addEventListener("click", (event) => {
       event.currentTarget.closest(".course-row").remove();
+      updateCourseCount();
     });
+    applyCourseFilter();
+  });
+  $("#course-filter").addEventListener("input", applyCourseFilter);
+  document.addEventListener("input", (event) => {
+    if (event.target.closest?.("#course-editor") && event.target.matches('[data-field="name"]')) {
+      applyCourseFilter();
+    }
   });
   $("#save-record").addEventListener("click", saveRecord);
   $("#reset-sections").addEventListener("click", resetSections);
