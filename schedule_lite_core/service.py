@@ -52,6 +52,22 @@ def resolve_time(course: Course, sections: dict[int, Section]) -> tuple[str, str
     return start, end
 
 
+def is_abandoned(
+    tt: Timetable,
+    course: Course | None,
+    start: str = "",
+    day: date | None = None,
+) -> bool:
+    """只判断指定日期、指定课程是否被标记翘课。"""
+    if not tt.abandon_date or not tt.abandon_course:
+        return False
+    if day is not None and tt.abandon_date != day.isoformat():
+        return False
+    if course is None or tt.abandon_course != course.name:
+        return False
+    return not tt.abandon_start or tt.abandon_start == start
+
+
 def week_state(tt: Timetable, d: date) -> tuple[int, str]:
     """返回 (第几周, "before"|"during"|"after")。"""
     term = tt.term_date()
@@ -208,7 +224,6 @@ def format_day(
     header = f"{prefix}{owner}{day_label} · 第 {week} 周（共 {tt.total_weeks} 周）{extra}"
 
     leave = tt.leave_on(d)
-    abandoned = tt.abandon_date == d.isoformat()
     items = day_entries(tt, d, holiday)
 
     def moved_out_notes() -> list[str]:
@@ -229,16 +244,12 @@ def format_day(
         if holiday_off:
             return header + f"\n{('今天' if d == today else '这天')}放假～"
         day_word = "今天" if d == today else "这天"
-        suffix = "（已标记翘课）" if abandoned else ""
-        return "\n".join([header, f"{day_word}没有课～{suffix}"] + moved_out_notes())
+        return "\n".join([header, f"{day_word}没有课～"] + moved_out_notes())
 
     lines = [header]
     if leave:
         reason = str(leave.get("reason") or "")
         lines.append(f"📝 已请假{f'：{reason}' if reason else ''}")
-    if abandoned:
-        day_word = "今日" if d == today else "这天"
-        lines.append(f"🚫 {day_word}翘课（全部课程）")
     for item in items:
         line = course_line(item.course, item.start, item.end, show_teacher)
         marks = []
@@ -246,7 +257,7 @@ def format_day(
             marks.append("调课")
         if leave:
             marks.append("请假")
-        if abandoned:
+        if is_abandoned(tt, item.course, item.start, d):
             marks.append("翘课")
         if marks:
             line += f"（{'·'.join(marks)}）"
@@ -278,7 +289,6 @@ def status_now(
     items = entries if entries is not None else day_entries(tt, today, holiday)
     tuples = [(item.course, item.start, item.end) for item in items]
     starts = [minutes_of(start) or 0 for _course, start, _end in tuples]
-    abandoned = tt.abandon_date == today.isoformat()
     leave = tt.leave_on(today)
     holiday_off = bool(holiday is not None and holiday.is_off(today))
 
@@ -317,8 +327,12 @@ def status_now(
         if (minutes_of(s) or 0) <= now_min < (minutes_of(e) or 0)
     ]
     if in_class:
-        if abandoned:
-            course, start, end = in_class[0]
+        skipped = next(
+            ((c, s, e) for c, s, e in in_class if is_abandoned(tt, c, s, today)),
+            None,
+        )
+        if skipped:
+            course, start, end = skipped
             remain = max((minutes_of(end) or now_min) - now_min, 0)
             result.update(
                 type=2,
@@ -339,15 +353,6 @@ def status_now(
             names = " / ".join(c.name for c, _, _ in in_class)
             detail = " / ".join(f"{c.name[:1]}{s}-{e}" for c, s, e in in_class)
             result.update(type=0, order=(0, 0), main=names, sub=detail)
-        return result
-
-    if abandoned:
-        result.update(
-            type=2,
-            order=(0, 1),
-            main="今日翘课",
-            sub=f"今天共 {len(items)} 节课，整日标记为翘课",
-        )
         return result
 
     upcoming_index = bisect_right(starts, now_min)
