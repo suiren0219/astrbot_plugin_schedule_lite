@@ -208,6 +208,7 @@ def format_day(
     header = f"{prefix}{owner}{day_label} · 第 {week} 周（共 {tt.total_weeks} 周）{extra}"
 
     leave = tt.leave_on(d)
+    abandoned = tt.abandon_date == d.isoformat()
     items = day_entries(tt, d, holiday)
 
     def moved_out_notes() -> list[str]:
@@ -228,12 +229,16 @@ def format_day(
         if holiday_off:
             return header + f"\n{('今天' if d == today else '这天')}放假～"
         day_word = "今天" if d == today else "这天"
-        return "\n".join([header, f"{day_word}没有课～"] + moved_out_notes())
+        suffix = "（已标记翘课）" if abandoned else ""
+        return "\n".join([header, f"{day_word}没有课～{suffix}"] + moved_out_notes())
 
     lines = [header]
     if leave:
         reason = str(leave.get("reason") or "")
         lines.append(f"📝 已请假{f'：{reason}' if reason else ''}")
+    if abandoned:
+        day_word = "今日" if d == today else "这天"
+        lines.append(f"🚫 {day_word}翘课（全部课程）")
     for item in items:
         line = course_line(item.course, item.start, item.end, show_teacher)
         marks = []
@@ -241,6 +246,8 @@ def format_day(
             marks.append("调课")
         if leave:
             marks.append("请假")
+        if abandoned:
+            marks.append("翘课")
         if marks:
             line += f"（{'·'.join(marks)}）"
         lines.append(line)
@@ -317,7 +324,7 @@ def status_now(
                 type=2,
                 order=(2, remain),
                 main=course.name,
-                sub=f"{start}-{end}（剩余 {fmt_minutes(remain)}）",
+                sub=f"{start}-{end}（翘课 · 剩余 {fmt_minutes(remain)}）",
             )
         elif len(in_class) == 1:
             course, start, end = in_class[0]
@@ -332,6 +339,15 @@ def status_now(
             names = " / ".join(c.name for c, _, _ in in_class)
             detail = " / ".join(f"{c.name[:1]}{s}-{e}" for c, s, e in in_class)
             result.update(type=0, order=(0, 0), main=names, sub=detail)
+        return result
+
+    if abandoned:
+        result.update(
+            type=2,
+            order=(0, 1),
+            main="今日翘课",
+            sub=f"今天共 {len(items)} 节课，整日标记为翘课",
+        )
         return result
 
     upcoming_index = bisect_right(starts, now_min)
