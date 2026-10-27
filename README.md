@@ -1,14 +1,23 @@
 # 课表 Lite（astrbot_plugin_schedule_lite）
 
 [![tests](https://github.com/suiren0219/astrbot_plugin_schedule_lite/actions/workflows/tests.yml/badge.svg)](https://github.com/suiren0219/astrbot_plugin_schedule_lite/actions/workflows/tests.yml)
+[![issues](https://img.shields.io/badge/Issues-提交反馈-blue)](https://github.com/suiren0219/astrbot_plugin_schedule_lite/issues)
 
-BLBot 式课表功能的 AstrBot 独立实现。重点在**导入**：把不同课表软件导出的数据统一成
+仓库：<https://github.com/suiren0219/astrbot_plugin_schedule_lite> ·
+反馈：<https://github.com/suiren0219/astrbot_plugin_schedule_lite/issues>
+
+BLBot 式课表功能的 AstrBot 独立实现，适合部署在 **QQ 群**里：群成员各自把课表 App
+导出的 `.ics`、分享口令或链接发给机器人完成绑定，之后任何人都能在群里同步查看
+「谁在上课、谁请假、谁今天没课」。重点在**导入**：把不同课表软件导出的数据统一成
 「第几周 + 星期几 + 起止时间」，再做去重合并、补全作息和异常提示。
+
+> 课表 Lite **不能直接对接校园网 / 教务系统**：不会登录教务系统、不会访问校园网，
+> 也不抓取成绩和个人信息；它只解析你主动发送的导出文件或分享口令。
 
 ## 功能
 
-- 多来源导入：Nexio 课程表分享口令/JSON/ICS、小爱课程表分享链接、WakeUp 课程表口令/备份、iCalendar(.ics)、拾光课程表 JSON、通用 JSON/CSV
-- 广泛的 ICS 兼容：Nexio 课表、拾光课程表、小爱伴侣、WakeUp 等多数课表 App 都能导出
+- 多来源导入：Nexio 课程表分享口令/JSON/ICS、WakeUp 课程表口令/备份、iCalendar(.ics)、拾光课程表 JSON、通用 JSON/CSV
+- 广泛的 ICS 兼容：Nexio 课表、拾光课程表、WakeUp 等多数课表 App 都能导出
   `.ics`，导出文件或分享链接直接导入即可；课程名、教师、地点、周次会从标题/描述里尽量提取
 - WebUI 控制台：AstrBot 插件页里管理课表数据（增删改）、节假日缓存和全部运行设置；支持在后台粘贴口令/链接/JSON/ICS 或文件直接导入；支持浅色、深色、跟随系统三态主题，并跟随 AstrBot 后台主题变化
 - 图片输出：帮助手册渲染成 Markdown 长图，按合并转发一次发出；「群友在上什么课」是
@@ -59,20 +68,11 @@ BLBot 式课表功能的 AstrBot 独立实现。重点在**导入**：把不同�
 | `/课表 作息 [1 08:00-08:45 …]` | 查看/修改个人作息 |
 | `/课表 学期 2026-09-07` | 修正第 1 周周一（CSV 等没带开学日期时用） |
 | `/课表 导出` | 输出本插件的通用 JSON |
-| `/课表 帮助` | 使用手册（合并转发图片）；`/课表 帮助 文本` 只看文字 |
+| `/课表 帮助` | 先发分类引导；`/课表 帮助 导入` 等发送对应分类的图文手册，`全部` 查看完整版，`文本` 只看文字 |
 
 也支持 `/课表导入 …`、`/课表排行 …` 这种直接写法。
 
 ## 导入方式
-
-### 小爱课程表
-
-1. 在小爱课程表 App 里导入或手动录入课表
-2. 课程表设置 → 分享课表 → 复制分享链接
-3. `/课表 导入 <完整链接>`
-
-链接里的 token 包含 `userId / deviceId / ctId`，插件据此请求小爱课表接口。
-接口属于小米，可能随时调整；失败时会给出具体原因。
 
 ### WakeUp 课程表
 
@@ -82,7 +82,7 @@ BLBot 式课表功能的 AstrBot 独立实现。重点在**导入**：把不同�
 ### iCalendar（推荐，兼容最多）
 
 - `/课表 导入 https://.../xxx.ics`，或把 `.ics` 文件发给机器人
-- 适用于 Nexio 课表、拾光课程表、小爱伴侣、WakeUp 以及大多数第三方课表 App 的
+- 适用于 Nexio 课表、拾光课程表、WakeUp 以及大多数第三方课表 App 的
   「导出日历 / 导出 ICS」功能；不需要登录接口，兼容性最稳
 - 支持 `DTSTART/DTEND`、`TZID`、UTC、浮动时间、`DURATION`、`RRULE`
   （WEEKLY/DAILY/MONTHLY/YEARLY、`INTERVAL`/`BYDAY`/`UNTIL`/`COUNT`）、
@@ -134,12 +134,15 @@ CSV 用表头识别列，至少需要课程、星期、开始、结束、周次�
 
 ### 帮助长图
 
-`/课表 帮助` 把 `docs/help.md` 排版成几张长图，放在一条合并转发消息里发送，
-避免刷屏。Markdown 源文件和渲染出的 PNG 都会留存在插件数据目录：
+`/课表 帮助` 先发送分类引导（导入、查询、请假/调课、状态/排行、设置、面板、常见问题），
+用户再发送 `/课表 帮助 导入` 等即可只渲染该分类，减少一次刷出整本手册。
+`/课表 帮助 全部` 把 `docs/help.md` 完整排版成长图，放在一条合并转发消息里发送。
+Markdown 源文件和渲染出的 PNG 都会留存在插件数据目录：
 
 ```
 data/plugin_data/astrbot_plugin_schedule_lite/help/
 ├── help.md           # 本地留存的手册
+├── help-导入.md      # 分类文档
 └── help-*.png        # 按内容哈希缓存的图片，改文档会自动重渲染
 ```
 
@@ -148,12 +151,13 @@ data/plugin_data/astrbot_plugin_schedule_lite/help/
 
 ### 群友在上什么课
 
-`/课表 在上` 在群里发送状态卡片：每人一行，带头像首字母、昵称、状态色块
-（翘课/请假 / 正在上课 / 即将上课 / 有空 / 无课程）、当前课程和教室/时间。
+`/课表 在上` 在群里发送状态卡片：每人一行，带 QQ 头像（取不到时回退首字母）、
+昵称、状态色块（翘课/请假 / 正在上课 / 即将上课 / 有空 / 无课程）、当前课程和教室/时间。
 排序依次为：翘课/请假 → 进行中/分身中 → 下一节 → 已结束 → 无课程；
 超过 `everyone_hide_idle_over`（默认 12 人）时隐藏无课同学，并在图片底部注明。
-默认每页 8 人，人多自动分页，每页一张图。图片缓存在 `cache/everyone/`，
-只统计在本群用过课表的人。
+默认每页 8 人，人多自动分页；如果最后一页不足半页，会优先并页或重新均分，
+避免出现只有一两个人的尾页。图片缓存在 `cache/everyone/`，头像缓存在
+`cache/avatars/`（30 天），只统计在本群用过课表的人。
 
 状态计算全部基于本地缓存：每份课表维护按星期索引的课程表，状态结果按
 「用户 + 分钟」缓存，当天课程快照也会复用，多个群查同一批人时不会重复计算；
@@ -238,6 +242,7 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 | `notify_check_seconds` | 60 | 提醒检查间隔 |
 | `help_image` | true | 帮助用合并转发图片 |
 | `everyone_image` | true | 群友状态用图片卡片 |
+| `avatar_enabled` | true | 状态卡片拉取 QQ 头像，失败回退首字母 |
 | `image_width` | 900 | 渲染图片宽度（像素） |
 | `font_path` | 空 | 自定义中文字体路径（Linux 常用） |
 | `everyone_page_size` | 8 | 状态卡片每页人数 |
@@ -262,9 +267,8 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 
 ## 已知限制
 
-- 小爱课程表分享功能已被小米长期下线过，链接可能根本打不开；插件仍会尝试按分享链接里的 token 调接口，失败会提示具体原因
 - Nexio 分享口令依赖 App 自建的中转服务（固定 IP + 3000 端口），服务变动时会失效；长期使用建议导出 ICS/JSON
-- 小爱/WakeUp 的导入都依赖官方接口，接口变动时可能需要更新适配
+- WakeUp 的导入依赖官方接口，接口变动时可能需要更新适配
 - WakeUp 的接口固定带 `version: 280` 请求头，上游改版后可能失效
 - 拾光只支持单表导入 JSON，不支持整库备份
 - iCalendar 只实现常用子集；带 `BYSETPOS` 等复杂规则的日程可能不完整

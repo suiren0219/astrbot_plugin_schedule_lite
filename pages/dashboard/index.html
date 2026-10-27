@@ -36,6 +36,27 @@
 
     <main>
       <section id="view-overview" class="view">
+        <article class="card intro-card">
+          <div class="intro-head">
+            <span class="intro-badge">QQ 群课表同步</span>
+            <h2>让群友一眼看到谁正在上课</h2>
+          </div>
+          <p class="intro-lead">
+            课表 Lite 部署在 AstrBot 后，群成员把课表 App 导出的 <b>.ics</b>、分享口令或链接
+            发给机器人即可绑定。之后在群里发送 <code>/课表 在上</code>，就能同步看到群成员
+            当前是在上课、请假、翘课，还是今天没课。
+          </p>
+          <div class="intro-points">
+            <div><b>群内同步</b><span>只统计在本群绑定过的成员，按重要状态优先排序，人多自动分页并收起无课同学。</span></div>
+            <div><b>多来源导入</b><span>Nexio、拾光、WakeUp、iCalendar，以及通用 JSON / CSV。</span></div>
+            <div><b>不直连校园网</b><span>不会登录教务系统或校园网，也不抓取成绩；数据只来自你主动发送的导出文件或分享口令。</span></div>
+          </div>
+          <div class="intro-links">
+            <a href="https://github.com/suiren0219/astrbot_plugin_schedule_lite" target="_blank" rel="noopener">GitHub 仓库</a>
+            <a href="https://github.com/suiren0219/astrbot_plugin_schedule_lite/issues" target="_blank" rel="noopener">提交 Issue</a>
+            <span>课表只保存在机器人本地</span>
+          </div>
+        </article>
         <div class="stat-grid">
           <article class="card stat"><span>绑定用户</span><strong id="stat-users">—</strong><small>本机课表记录</small></article>
           <article class="card stat"><span>课程安排</span><strong id="stat-courses">—</strong><small>去重后的条目</small></article>
@@ -78,6 +99,7 @@
             <div><h2>课表数据</h2><p>可以直接新增、编辑或删除绑定记录</p></div>
             <div class="row-actions">
               <input id="search" class="input" placeholder="搜索昵称 / QQ / 课表名">
+              <button class="btn ghost" id="refresh-records" type="button">刷新</button>
               <button class="btn primary" id="add-record">新增课表</button>
             </div>
           </div>
@@ -112,7 +134,8 @@
             <label class="setting"><span><b>保存任课教师</b><small>默认关闭</small></span><input type="checkbox" id="set-store-teacher"></label>
             <label class="setting"><span><b>保存上课地点</b><small>默认关闭</small></span><input type="checkbox" id="set-store-location"></label>
             <label class="setting"><span><b>群友状态图片</b><small>失败自动退回文字</small></span><input type="checkbox" id="set-everyone-image"></label>
-            <label class="setting"><span><b>帮助合并转发图片</b><small>/课表 帮助</small></span><input type="checkbox" id="set-help-image"></label>
+            <label class="setting"><span><b>QQ 头像</b><small>失败回退首字母</small></span><input type="checkbox" id="set-avatar"></label>
+            <label class="setting wide"><span><b>帮助合并转发图片</b><small>/课表 帮助</small></span><input type="checkbox" id="set-help-image"></label>
             <label class="setting"><span><b>隐藏无课同学</b><small>超过人数时</small></span><input class="input short" type="number" id="set-hide-idle"></label>
             <label class="setting"><span><b>每页人数</b><small>大于 8 人自动分页</small></span><input class="input short" type="number" id="set-page-size"></label>
           </div>

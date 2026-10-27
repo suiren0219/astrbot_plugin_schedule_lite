@@ -1,7 +1,7 @@
 """AstrBot Star 插件：课表 Lite（BLBot 课表功能的独立实现）。
 
-核心在“导入”：小爱课程表分享链接、WakeUp 分享口令/备份、iCalendar、
-拾光课程表 JSON、通用 JSON/CSV 都归一化成同一套数据结构（周次列表 +
+核心在“导入”：Nexio 分享口令/JSON/ICS、WakeUp 分享口令/备份、
+iCalendar、拾光课程表 JSON、通用 JSON/CSV 都归一化成同一套数据结构（周次列表 +
 星期 + 起止时间），再统一做去重合并、缺时间补全和异常提示。
 
 命令：
@@ -129,30 +129,73 @@ def _safe_int(value, default: int = 0) -> int:
         return default
 
 
-HELP_TEXT = """📚 课表指令
-/课表 [明天|周一|9/1] [@某人]  查看课表
-/课表 在上                    群友现在在上什么课
-/课表 排行 [今日|本周|本月|学期] [全部]
-/课表 导入 <链接/口令/JSON/文件>
-/课表 导入 + 引用文件/链接的消息  引用导入
-/课表 删除
-/课表 提醒 [分钟|关]           私聊订阅上课提醒
-/课表 备注 <课程> [备注]
-/课表 翘课                     切换今日翘课状态
-/课表 作息 [1 08:00-08:45 …]   查看/修改个人作息
-/课表 学期 2026-09-07           修正第 1 周周一
-/课表 请假 [日期/范围] [原因]   登记请假
-/课表 销假 [日期]               取消请假
-/课表 调课 [课程] A B [互换]    调课；撤销 [日期] / 清空
-/课表 调休 [日期] [周几|清]     查看节假日/设置补班
-/课表 倒计时                   重要日期（四六级等，控制台维护）
-/课表 帮助
+GITHUB_URL = "https://github.com/suiren0219/astrbot_plugin_schedule_lite"
+ISSUE_URL = f"{GITHUB_URL}/issues"
 
-群友状态优先显示翘课/请假，无课排最后；人多自动隐藏无课并分页。
-控制台可增删课表、刷新节假日、设置早八推送、满课榜和累计榜。
 
-支持导入：Nexio 分享口令/JSON/ICS、小爱课程表分享链接、WakeUp 口令/备份、
-iCalendar(.ics)、拾光课程表 JSON、通用 JSON/CSV。也可以直接发文件。"""
+ONBOARDING_TEXT = """👋 你还没有绑定课表，先完成第一步：
+
+1. 在课表 App 导出 .ics，或复制分享口令 / 链接
+2. 直接把文件、链接或口令发给机器人
+3. 也可以发送 /课表 导入 <链接或口令>
+4. 导入完成后，发送 /课表 查看今天的课表
+
+常用入口：
+/课表 在上    看群友现在上什么课
+/课表 排行    本周课程时长榜
+/课表 帮助    按分类查看完整用法"""
+
+HELP_INDEX_TEXT = f"""📚 课表 Lite 帮助（先看分类）
+
+1. 导入与绑定：/课表 帮助 导入
+2. 查询课表：/课表 帮助 查询
+3. 请假 / 调课 / 调休：/课表 帮助 请假
+4. 群友状态与排行：/课表 帮助 状态
+5. 提醒 / 隐私 / 修正：/课表 帮助 设置
+6. 控制台与定时节目：/课表 帮助 面板
+7. 常见问题：/课表 帮助 常见
+8. 完整手册：/课表 帮助 全部
+
+发送对应分类后，机器人会发送该分类的图文手册。
+遇到问题或想提建议：{ISSUE_URL}"""
+
+HELP_CATEGORIES = {
+    "导入": {
+        "title": "导入与绑定",
+        "headings": ("快速开始", "导入课表"),
+        "aliases": ("导入", "绑定", "入门", "开始", "start", "import"),
+    },
+    "查询": {
+        "title": "查询课表",
+        "headings": ("查看课表",),
+        "aliases": ("查询", "查看", "课表", "query"),
+    },
+    "请假": {
+        "title": "请假 / 调课 / 调休",
+        "headings": ("请假 / 销假", "调课", "节假日与调休"),
+        "aliases": ("请假", "销假", "调课", "调休", "补班", "leave", "adjust"),
+    },
+    "状态": {
+        "title": "群友状态与排行",
+        "headings": ("群友在上什么课", "课程时长榜"),
+        "aliases": ("状态", "在上", "排行", "群友", "everyone", "rank"),
+    },
+    "设置": {
+        "title": "提醒 / 隐私 / 修正",
+        "headings": ("上课提醒", "隐私", "修正数据"),
+        "aliases": ("设置", "提醒", "隐私", "修正", "notify", "privacy"),
+    },
+    "面板": {
+        "title": "控制台与定时节目",
+        "headings": ("WebUI 控制台", "定时节目", "重要日期倒计时"),
+        "aliases": ("面板", "控制台", "后台", "定时", "早八", "panel", "webui"),
+    },
+    "常见": {
+        "title": "常见问题",
+        "headings": ("常见问题",),
+        "aliases": ("常见", "问题", "faq", "错误"),
+    },
+}
 
 SUBCOMMANDS = {
     "帮助": "help", "help": "help", "用法": "help", "说明": "help",
@@ -185,7 +228,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.1",
+    "v1.5.3",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -334,6 +377,94 @@ class ScheduleLitePlugin(Star):
 
     def _plugin_data_dir(self) -> Path:
         return Path(self._data_path()).parent
+
+    # ---------------------------------------------------------- QQ 头像
+
+    def _avatar_enabled(self) -> bool:
+        return bool(self._cfg("avatar_enabled", True))
+
+    @staticmethod
+    def _qq_number(owner_id: str) -> str:
+        digits = re.sub(r"\D", "", str(owner_id or ""))
+        return digits if 5 <= len(digits) <= 12 else ""
+
+    def _avatar_url(self, owner_id: str) -> str:
+        qq = self._qq_number(owner_id)
+        if not qq or not self._avatar_enabled():
+            return ""
+        return f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100"
+
+    async def _avatar_paths(self, timetables) -> dict[str, str]:
+        """下载并缓存 QQ 头像；失败时静默回退首字母，不阻塞状态查询。"""
+        if not self._avatar_enabled():
+            return {}
+        wanted: dict[str, str] = {}
+        for tt in timetables:
+            qq = self._qq_number(getattr(tt, "owner_id", ""))
+            if qq:
+                wanted[str(tt.owner_id)] = qq
+        if not wanted:
+            return {}
+        cache_dir = self._plugin_data_dir() / "cache" / "avatars"
+        try:
+            cache_dir.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return {}
+        now_ts = self._now().timestamp()
+        paths: dict[str, str] = {}
+        pending: list[tuple[str, str, Path]] = []
+        for owner_id, qq in wanted.items():
+            path = cache_dir / f"{qq}.png"
+            try:
+                stat = path.stat()
+                if stat.st_size > 256 and now_ts - stat.st_mtime < 30 * 86400:
+                    paths[owner_id] = str(path)
+                    continue
+            except OSError:
+                pass
+            pending.append((owner_id, qq, path))
+        if not pending or self._http is None:
+            return paths
+        try:
+            import aiohttp
+        except Exception:  # noqa: BLE001
+            return paths
+
+        semaphore = asyncio.Semaphore(12)
+
+        async def fetch(owner_id: str, qq: str, path: Path):
+            async with semaphore:
+                try:
+                    timeout = aiohttp.ClientTimeout(total=3)
+                    async with self._http.get(
+                        f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100",
+                        timeout=timeout,
+                    ) as resp:
+                        if resp.status != 200:
+                            return
+                        data = await resp.read()
+                    if len(data) < 512:
+                        return
+                    tmp = path.with_suffix(".tmp")
+                    tmp.write_bytes(data)
+                    os.replace(tmp, path)
+                    paths[owner_id] = str(path)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug(f"[{PLUGIN_NAME}] 获取头像 {qq} 失败: {e}")
+
+        tasks = [asyncio.create_task(fetch(*item)) for item in pending]
+        _, still_running = await asyncio.wait(tasks, timeout=4)
+        for task in still_running:
+            task.cancel()
+        if still_running:
+            await asyncio.gather(*still_running, return_exceptions=True)
+        return paths
+
+    async def _attach_avatars(self, entries: list[dict], timetables) -> list[dict]:
+        avatars = await self._avatar_paths(timetables)
+        for entry in entries:
+            entry["avatar"] = avatars.get(str(entry.get("owner_id") or ""), "")
+        return entries
 
     # ---------------------------------------------------------- 节假日 / 定时节目
 
@@ -868,7 +999,7 @@ class ScheduleLitePlugin(Star):
         else:
             tt = self._own_tt(event)
             if not tt:
-                yield event.plain_result("你还没有导入课表哦。\n" + HELP_TEXT)
+                yield event.plain_result(ONBOARDING_TEXT)
                 return
             label = ""
             if self._touch(event, tt):
@@ -917,9 +1048,10 @@ class ScheduleLitePlugin(Star):
         now = self._now()
         if not group_id:
             if not tt:
-                yield event.plain_result("你还没有导入课表哦。\n" + HELP_TEXT)
+                yield event.plain_result(ONBOARDING_TEXT)
                 return
             entries = self._cached_entries(f"u:{tt.owner_id}", [tt], now)
+            await self._attach_avatars(entries, [tt])
             if self._image_enabled("everyone_image"):
                 pages = self._render_everyone(
                     entries,
@@ -952,13 +1084,16 @@ class ScheduleLitePlugin(Star):
             visible.append(tt)
         if not visible:
             yield event.plain_result(
-                "本群还没有人导入课表哦。\n发送 /课表 导入 <链接或文件> 即可加入。"
+                "本群还没有人绑定课表。\n"
+                "把 .ics 文件、分享口令或链接直接发给机器人即可加入；"
+                "发送 /课表 帮助 导入 查看图文教程。"
             )
             return
 
         entries = self._cached_entries(
             f"g:{group_id}", visible, now, hide_idle_over=self._hide_idle_over()
         )
+        await self._attach_avatars(entries, visible)
         hidden = max(len(visible) - len(entries), 0)
         if self._image_enabled("everyone_image"):
             pages = self._render_everyone(
@@ -1392,7 +1527,7 @@ class ScheduleLitePlugin(Star):
     async def _h_delete(self, event):
         tt = self.store.delete(self._user_key(event))
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         await self._save()
         yield event.plain_result(f"已删除课表「{tt.name}」。")
@@ -1400,7 +1535,7 @@ class ScheduleLitePlugin(Star):
     async def _h_note(self, event, args: str):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         if not args:
             if event.get_group_id():
@@ -1477,7 +1612,7 @@ class ScheduleLitePlugin(Star):
     async def _h_abandon(self, event):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         today = self._now().date().isoformat()
         if tt.abandon_date == today:
@@ -1492,7 +1627,7 @@ class ScheduleLitePlugin(Star):
     async def _h_sections(self, event, args: str):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         if not args:
             if not tt.sections:
@@ -1515,19 +1650,83 @@ class ScheduleLitePlugin(Star):
         await self._save()
         yield event.plain_result(f"已更新作息，共 {len(sections)} 节。")
 
+    @staticmethod
+    def _help_category(args: str) -> str:
+        token = args.strip().lower()
+        if not token:
+            return ""
+        if token in ("全部", "all", "完整", "手册"):
+            return "all"
+        for key, meta in HELP_CATEGORIES.items():
+            if token == key.lower() or token in meta["aliases"]:
+                return key
+        return ""
+
+    @staticmethod
+    def _split_help(markdown: str) -> tuple[str, dict[str, str]]:
+        parts = re.split(r"(?m)^##\s+", markdown)
+        intro = re.sub(r"(?m)^#\s+.*\n?", "", parts[0], count=1).strip()
+        sections: dict[str, str] = {}
+        for chunk in parts[1:]:
+            title, _, body = chunk.partition("\n")
+            title = title.strip()
+            if title:
+                sections[title] = f"## {title}\n{body.rstrip()}"
+        return intro, sections
+
+    def _help_markdown(self, key: str) -> str:
+        doc = (Path(PLUGIN_DIR) / "docs" / "help.md").read_text(encoding="utf-8")
+        if key == "all":
+            return doc
+        meta = HELP_CATEGORIES[key]
+        intro, sections = self._split_help(doc)
+        picked = [sections[title] for title in meta["headings"] if title in sections]
+        body = "\n\n".join(picked) if picked else intro
+        return (
+            f"# 课表 Lite · {meta['title']}\n\n"
+            f"{body}\n\n"
+            "> 发送 /课表 帮助 返回分类，或 /课表 帮助 全部 查看完整手册。\n"
+            f"> 问题反馈 / 提 Issue：{ISSUE_URL}"
+        )
+
     async def _h_help(self, event, args: str):
-        if args.strip().lower() in ("文本", "text", "纯文本", "md"):
-            yield event.plain_result(HELP_TEXT)
+        raw = args.strip()
+        token = raw.lower()
+        if token in ("文本", "text", "纯文本", "md"):
+            try:
+                yield event.plain_result(self._help_markdown("all"))
+            except OSError:
+                yield event.plain_result(HELP_INDEX_TEXT)
+            return
+
+        key = self._help_category(raw)
+        if not raw:
+            yield event.plain_result(HELP_INDEX_TEXT)
+            return
+        if not key:
+            yield event.plain_result(f"没有找到分类「{raw}」。\n\n{HELP_INDEX_TEXT}")
+            return
+
+        try:
+            markdown = self._help_markdown(key)
+        except OSError:
+            yield event.plain_result(HELP_INDEX_TEXT)
             return
         if not self._image_enabled("help_image"):
-            yield event.plain_result(HELP_TEXT + "\n\n（发送 /课表 帮助 文本 可只看文字版）")
+            yield event.plain_result(markdown)
             return
         try:
-            doc_src = Path(PLUGIN_DIR) / "docs" / "help.md"
-            markdown = doc_src.read_text(encoding="utf-8")
             help_dir = self._plugin_data_dir() / "help"
             help_dir.mkdir(parents=True, exist_ok=True)
-            local_doc = help_dir / "help.md"
+            full_doc = (Path(PLUGIN_DIR) / "docs" / "help.md").read_text(encoding="utf-8")
+            local_full = help_dir / "help.md"
+            try:
+                if not local_full.is_file() or local_full.read_text(encoding="utf-8") != full_doc:
+                    local_full.write_text(full_doc, encoding="utf-8")
+            except OSError:
+                pass
+            name = "help.md" if key == "all" else f"help-{key}.md"
+            local_doc = help_dir / name
             try:
                 if not local_doc.is_file() or local_doc.read_text(encoding="utf-8") != markdown:
                     local_doc.write_text(markdown, encoding="utf-8")
@@ -1539,11 +1738,16 @@ class ScheduleLitePlugin(Star):
                 width=self._image_width(),
                 font_path=self._font_path(),
             )
-            if pages and await self._send_image_pages(event, pages, title="课表 Lite 使用手册"):
+            title = (
+                "课表 Lite 使用手册"
+                if key == "all"
+                else f"课表 Lite · {HELP_CATEGORIES[key]['title']}"
+            )
+            if pages and await self._send_image_pages(event, pages, title=title):
                 return
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 帮助图片生成失败: {e}")
-        yield event.plain_result(HELP_TEXT)
+        yield event.plain_result(markdown)
 
     def _image_enabled(self, key: str) -> bool:
         return bool(self._cfg(key, True)) and render_mod.available(self._font_path())
@@ -1612,7 +1816,7 @@ class ScheduleLitePlugin(Star):
     async def _h_export(self, event):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         text = dumps_export(tt)
         if len(text) > 3000:
@@ -1627,7 +1831,7 @@ class ScheduleLitePlugin(Star):
         """手动修正学期开始日期（CSV/JSON 没带开学日期时用）。"""
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         if not args:
             term = tt.term_date()
@@ -2031,7 +2235,7 @@ class ScheduleLitePlugin(Star):
     async def _h_leave(self, event, args: str):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         today = self._now().date()
         tokens = [t for t in re.split(r"\s+", args.strip()) if t]
@@ -2068,7 +2272,7 @@ class ScheduleLitePlugin(Star):
     async def _h_leave_cancel(self, event, args: str):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         today = self._now().date()
         target = self._parse_cmd_date(args.strip(), today) if args.strip() else today
@@ -2154,7 +2358,7 @@ class ScheduleLitePlugin(Star):
     async def _h_adjust(self, event, args: str):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         text = args.strip()
         if text in ("清空", "清除", "重置"):
@@ -2227,7 +2431,7 @@ class ScheduleLitePlugin(Star):
     async def _h_makeup(self, event, args: str):
         tt = self._own_tt(event)
         if not tt:
-            yield event.plain_result("你还没有导入课表哦。")
+            yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
         today = self._now().date()
         text = args.strip()
@@ -2413,6 +2617,7 @@ class ScheduleLitePlugin(Star):
             "key": key,
             "owner_id": tt.owner_id,
             "owner_name": tt.owner_name,
+            "avatar": self._avatar_url(tt.owner_id),
             "name": tt.name,
             "term_start": tt.term_start,
             "total_weeks": tt.total_weeks,
@@ -2831,6 +3036,7 @@ class ScheduleLitePlugin(Star):
         "store_teacher",
         "store_location",
         "everyone_image",
+        "avatar_enabled",
         "help_image",
         "image_width",
         "everyone_page_size",
@@ -2872,6 +3078,7 @@ class ScheduleLitePlugin(Star):
                 "store_teacher",
                 "store_location",
                 "everyone_image",
+                "avatar_enabled",
                 "help_image",
                 "showcase_enabled",
                 "recap_enabled",
@@ -2975,6 +3182,12 @@ class ScheduleLitePlugin(Star):
                 now,
                 hide_idle_over=self._hide_idle_over(),
             )
+            avatars = {
+                tt.owner_id: self._avatar_url(tt.owner_id)
+                for tt in timetables
+            }
+            for entry in entries:
+                entry["avatar"] = avatars.get(entry.get("owner_id", ""), "")
             return self._ok({"items": entries, "total": len(entries)})
         except Exception as exc:  # noqa: BLE001
             return self._err(str(exc), 500)
