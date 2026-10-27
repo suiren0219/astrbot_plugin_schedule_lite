@@ -5,39 +5,6 @@
     "default": "",
     "invisible": true
   },
-  "default_section_times": {
-    "description": "🕘 默认作息（导入数据没有作息时兜底）",
-    "type": "template_list",
-    "default": [],
-    "hint": "WakeUp/拾光/Nexio 自带作息时优先用数据里的；只有节次没有时间时才用这里。留空使用内置 12 节作息。",
-    "templates": {
-      "section": {
-        "name": "一节作息",
-        "items": {
-          "index": {
-            "description": "节次序号",
-            "type": "int",
-            "default": 1
-          },
-          "start": {
-            "description": "开始时间",
-            "type": "string",
-            "default": "08:00"
-          },
-          "end": {
-            "description": "结束时间",
-            "type": "string",
-            "default": "08:45"
-          },
-          "alias": {
-            "description": "别名（可选）",
-            "type": "string",
-            "default": ""
-          }
-        }
-      }
-    }
-  },
   "default_total_weeks": {
     "description": "📅 默认学期总周数",
     "type": "int",

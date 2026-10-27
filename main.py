@@ -230,7 +230,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.5",
+    "v1.5.6",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -271,8 +271,6 @@ class ScheduleLitePlugin(Star):
         if self._scrub_privacy():
             await self._save()
             logger.info(f"[{PLUGIN_NAME}] 已按隐私配置清除历史课表中的教师/地点")
-        if self._migrate_section_config():
-            logger.info(f"[{PLUGIN_NAME}] 已把默认作息迁移为列表结构")
         self._load_events()
         self._load_broadcast_state()
         self._load_holiday_cache(self._now().year)
@@ -331,30 +329,13 @@ class ScheduleLitePlugin(Star):
         return datetime.now(get_tz(self._tz))
 
     def _fallback_sections(self):
-        """默认作息：兼容旧版多行文本和 template_list 的列表结构。"""
+        """内置默认作息；旧版配置里的作息仍兼容读取。"""
         value = self._cfg("default_section_times", "")
         if isinstance(value, str):
             sections = parse_section_text(value)
         else:
             sections = parse_section_times(value)
         return sections or default_sections()
-
-    def _migrate_section_config(self) -> bool:
-        """把旧版多行文本作息迁移成 template_list 的列表结构。"""
-        value = self._cfg("default_section_times", None)
-        if not isinstance(value, str) or not value.strip():
-            return False
-        sections = parse_section_text(value)
-        if not sections:
-            return False
-        self.config["default_section_times"] = [
-            {"index": s.index, "start": s.start, "end": s.end, "alias": s.alias}
-            for s in sections
-        ]
-        save_config = getattr(self.config, "save_config", None)
-        if callable(save_config):
-            save_config()
-        return True
 
     def _default_total_weeks(self) -> int:
         try:
@@ -2585,6 +2566,7 @@ class ScheduleLitePlugin(Star):
             ("overview", self._api_overview, ["GET"], "课表概览"),
             ("timetables", self._api_timetables, ["GET"], "课表列表"),
             ("timetable", self._api_timetable, ["GET"], "课表详情"),
+            ("sections", self._api_sections, ["GET"], "默认作息"),
             ("timetable/save", self._api_timetable_save, ["POST"], "新增/保存课表"),
             ("timetable/delete", self._api_timetable_delete, ["POST"], "删除课表"),
             ("import", self._api_import, ["POST"], "导入课表"),
@@ -2872,9 +2854,13 @@ class ScheduleLitePlugin(Star):
             tt = Timetable.from_dict(old.to_dict()) if old else Timetable(
                 owner_id=owner_id or key.split(":", 1)[-1]
             )
-            tt.sections = parse_section_times(payload.get("sections")) or tt.sections or (
-                self._fallback_sections()
-            )
+            if "sections" in payload:
+                # 编辑器里清空作息视为恢复内置默认，而不是保留旧值
+                tt.sections = (
+                    parse_section_times(payload.get("sections")) or self._fallback_sections()
+                )
+            elif not tt.sections:
+                tt.sections = self._fallback_sections()
             if not self._store_teacher():
                 for course in courses:
                     course.teacher = ""
@@ -2949,6 +2935,20 @@ class ScheduleLitePlugin(Star):
             return self._ok(self._tt_summary(key, tt))
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"[{PLUGIN_NAME}] 保存课表失败")
+            return self._err(str(exc), 500)
+
+    async def _api_sections(self):
+        """给控制台的作息编辑框预填内置默认作息。"""
+        try:
+            return self._ok(
+                {
+                    "items": [
+                        {"index": s.index, "start": s.start, "end": s.end, "alias": s.alias}
+                        for s in self._fallback_sections()
+                    ]
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
             return self._err(str(exc), 500)
 
     async def _api_timetable_delete(self):

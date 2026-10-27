@@ -237,8 +237,11 @@ input[type="checkbox"]:checked::after { transform: translateX(20px); }
 .form-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .form-grid label, .course-row label { display: grid; gap: 5px; font-size: 12px; color: var(--miuix-text-2); }
 .form-grid .input { width: 100%; min-width: 0; }
+.form-grid .wide { grid-column: 1 / -1; }
+.form-grid .wide .input { max-width: 320px; }
+.sections-input { width: 100%; min-height: 128px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; line-height: 1.7; }
 .course-editor { display: grid; gap: 10px; }
-.course-row { display: grid; grid-template-columns: 1.6fr .7fr 1fr 1fr .7fr .7fr 1fr 1fr auto; gap: 8px; align-items: end; padding: 12px; border-radius: 18px; background: var(--miuix-soft); }
+.course-row { display: grid; grid-template-columns: 1.7fr .8fr 1fr 1fr 1fr .8fr .8fr 1fr auto; gap: 8px; align-items: end; padding: 12px; border-radius: 18px; background: var(--miuix-soft); }
 .course-row .input { width: 100%; min-width: 0; padding: 8px 10px; }
 .course-row .remove { color: var(--miuix-red); }
 
