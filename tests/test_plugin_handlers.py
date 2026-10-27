@@ -1398,6 +1398,7 @@ def test_backup_and_restore_roundtrip(plugin):
     _import_sample(plugin, _Event("/课表 导入", group="g1"))
     backup = asyncio.run(plugin._api_backup())
     assert backup["status"] == "ok"
+    assert backup["data"]["version"] == 1
     assert "test:10001" in backup["data"]["users"]
 
     # 破坏现场后再恢复
@@ -1409,6 +1410,33 @@ def test_backup_and_restore_roundtrip(plugin):
     assert result["data"]["restored"] == 1
     assert plugin.store.get("test:10001").courses
     assert plugin._events == []
+
+
+def test_restore_rejects_incompatible_backup(plugin):
+    import astrbot.api.web as web
+
+    web.request.body = {"version": 99, "users": {}}
+    result = asyncio.run(plugin._api_restore())
+    assert result[0]["status"] == "error"
+    assert "版本" in result[0]["message"]
+
+    web.request.body = {"plugin": "another_plugin", "users": {}}
+    result = asyncio.run(plugin._api_restore())
+    assert result[0]["status"] == "error"
+    assert "备份文件" in result[0]["message"]
+
+
+def test_restore_accepts_legacy_backup_without_version(plugin):
+    import astrbot.api.web as web
+
+    _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    backup = asyncio.run(plugin._api_backup())["data"]
+    legacy = {"users": backup["users"]}  # 老版本备份没有 version/plugin 字段
+    plugin.store.replace({})
+    web.request.body = legacy
+    result = asyncio.run(plugin._api_restore())
+    assert result["status"] == "ok"
+    assert result["data"]["restored"] == 1
 
 
 def test_early_push_skips_abandoned_and_holiday(tmp_path):
