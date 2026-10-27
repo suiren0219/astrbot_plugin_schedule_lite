@@ -229,7 +229,13 @@
                 placeholder="1 08:00-08:45&#10;2 08:55-09:40&#10;3 10:00-10:45"></textarea>
       <p class="muted">每行一节：序号 开始-结束。留空时使用内置 12 节作息。</p>
 
-      <div class="section-head compact"><div><h3>课程安排</h3></div><button class="btn ghost" id="add-course">添加一门课</button></div>
+      <div class="section-head compact">
+        <div><h3>课程安排</h3><p id="course-count"></p></div>
+        <div class="row-actions">
+          <input id="course-filter" class="input short" placeholder="按课程名过滤">
+          <button class="btn ghost" id="add-course">添加一门课</button>
+        </div>
+      </div>
       <div id="course-editor" class="course-editor"></div>
 
       <div class="section-head compact"><div><h3>请假记录</h3><p>日期留空不会保存</p></div><button class="btn ghost" id="add-leave">添加请假</button></div>

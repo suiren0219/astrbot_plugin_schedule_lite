@@ -1392,6 +1392,40 @@ def test_countdown_prefers_holiday(plugin):
     assert "寒假" in out[0]
 
 
+def test_export_import_roundtrip_keeps_records(plugin):
+    """导出的通用 JSON 在新设备上导入时，请假/调课/补班应一并恢复。"""
+    import astrbot.api.web as web
+
+    event = _import_sample(plugin)
+    tt = plugin.store.get(plugin._user_key(event))
+    tt.leaves = [{"start": "2026-09-10", "end": "2026-09-10", "reason": "病假"}]
+    tt.adjustments = [
+        {"from_date": "2026-09-11", "to_date": "2026-09-12", "course": "", "swap": False, "courses": []}
+    ]
+    tt.makeup_days = {"2026-10-10": 4}
+    asyncio.run(plugin._save())
+
+    exported = asyncio.run(_collect(plugin._h_export(event)))[0]
+    body = exported.strip()
+    assert body.startswith("```json")
+    payload = json.loads(body.removeprefix("```json").removesuffix("```"))
+    assert payload["leaves"] and payload["adjustments"] and payload["makeup_days"]
+
+    # 全新用户导入这份导出 → 记录应被带上
+    other = _Event(uid="88001", nick="迁移同学")
+    asyncio.run(_collect(plugin._h_import(other, json.dumps(payload, ensure_ascii=False))))
+    migrated = plugin.store.get(plugin._user_key(other))
+    assert migrated.leaves[0]["reason"] == "病假"
+    assert migrated.adjustments[0]["to_date"] == "2026-09-12"
+    assert migrated.makeup_days == {"2026-10-10": 4}
+
+    # 老用户重新导入时本地记录优先，不被导出内容覆盖
+    tt.makeup_days = {"2026-10-11": 5}
+    asyncio.run(plugin._save())
+    asyncio.run(_collect(plugin._h_import(event, json.dumps(payload, ensure_ascii=False))))
+    assert plugin.store.get(plugin._user_key(event)).makeup_days == {"2026-10-11": 5}
+
+
 def test_backup_and_restore_roundtrip(plugin):
     import astrbot.api.web as web
 
