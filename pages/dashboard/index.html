@@ -215,8 +215,20 @@
         <label>课表名<input class="input" id="f-name" placeholder="我的课表"></label>
         <label>开学日期<input class="input" id="f-term" placeholder="2026-09-07"></label>
         <label>总周数<input class="input" type="number" id="f-weeks" value="20"></label>
-        <label>时区<input class="input" id="f-tz" value="Asia/Shanghai"></label>
+        <label class="wide">时区<input class="input" id="f-tz" value="Asia/Shanghai"></label>
       </div>
+
+      <div class="section-head compact">
+        <div><h3>作息（节次时间）</h3><p>只影响这份课表；导入数据自带作息时优先用数据里的</p></div>
+        <div class="row-actions">
+          <button class="btn ghost" id="reset-sections" type="button">恢复默认</button>
+          <button class="btn ghost" id="clear-sections" type="button">清空</button>
+        </div>
+      </div>
+      <textarea class="input textarea sections-input" id="f-sections" rows="6"
+                placeholder="1 08:00-08:45&#10;2 08:55-09:40&#10;3 10:00-10:45"></textarea>
+      <p class="muted">每行一节：序号 开始-结束。留空时使用内置 12 节作息。</p>
+
       <div class="section-head compact"><div><h3>课程安排</h3></div><button class="btn ghost" id="add-course">添加一门课</button></div>
       <div id="course-editor" class="course-editor"></div>
 
