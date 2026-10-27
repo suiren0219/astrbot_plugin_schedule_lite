@@ -8,17 +8,17 @@ from typing import Awaitable, Callable
 from urllib.parse import unquote, urlparse
 
 from ..model import Section
-from . import generic, ics, nexio, shiguang, wakeup, xiaoai
+from . import generic, ics, nexio, shiguang, wakeup
 from .base import ImportFailure, ImportResult
 
 Fetch = Callable[..., Awaitable[str]]
 
 HELP = (
     "支持这些导入方式：\n"
-    "· 小爱课程表：分享链接（含 token）\n"
     "· WakeUp 课程表：分享口令（在线）或 .wakeup_schedule 备份文件\n"
     "· iCalendar：.ics 下载链接或文件内容\n"
     "· 拾光课程表：App 导出的课程表 JSON\n"
+    "· Nexio 课程表：分享口令 / JSON / ICS\n"
     "· 通用：本插件导出的 JSON、其他软件整理的 JSON/CSV\n"
     "直接把链接、口令或文件发给机器人即可。"
 )
@@ -158,21 +158,7 @@ async def import_any(
     if not text:
         raise ImportFailure(HELP)
 
-    # 1) 小爱课程表分享链接
-    if xiaoai.looks_like_link(text):
-        if not allow_network:
-            raise ImportFailure("当前配置禁止联网导入")
-        return await xiaoai.import_link(
-            text,
-            session=session,
-            fallback_sections=fallback_sections,
-            default_total_weeks=default_total_weeks,
-            store_teacher=store_teacher,
-            store_location=store_location,
-            tz=tz,
-        )
-
-    # 2) 普通链接
+    # 1) 普通链接（iCalendar / ICS 直链）
     if re.match(r"^(?:https?|webcal)://", text, re.I):
         if not allow_network:
             raise ImportFailure("当前配置禁止联网导入")
@@ -195,7 +181,7 @@ async def import_any(
             source_name=unquote(urlparse(url).path.rsplit("/", 1)[-1]) or "iCalendar 课表",
         )
 
-    # 3) Nexio 分享口令（中文趣味短语，30 分钟内有效）
+    # 2) Nexio 分享口令（中文趣味短语，30 分钟内有效）
     nexio_code = nexio.extract_code(text)
     is_local_payload = _looks_json(text) or "BEGIN:VCALENDAR" in text[:200].upper()
     if (
@@ -216,7 +202,7 @@ async def import_any(
             tz=tz,
         )
 
-    # 4) WakeUp 分享口令（形如「xxxxx」，或一整串字母数字）
+    # 3) WakeUp 分享口令（形如「xxxxx」，或一整串字母数字）
     code = wakeup.extract_code(text)
     quoted_code = bool(re.search(r"「([0-9A-Za-z\-_]{6,})」", text))
     if (
@@ -240,7 +226,7 @@ async def import_any(
             if not nexio_code:
                 raise
 
-    # 5) Nexio 分享口令（纯字母数字时与 WakeUp 口令同形，WakeUp 失败后再试）
+    # 4) Nexio 分享口令（纯字母数字时与 WakeUp 口令同形，WakeUp 失败后再试）
     if nexio_code and not is_local_payload:
         if not allow_network:
             raise ImportFailure("当前配置禁止联网导入")
@@ -254,7 +240,7 @@ async def import_any(
             tz=tz,
         )
 
-    # 6) 本地文本：ICS / JSON / CSV / WakeUp 备份
+    # 5) 本地文本：ICS / JSON / CSV / WakeUp 备份
     return parse_text(
         text,
         fallback_sections=fallback_sections,

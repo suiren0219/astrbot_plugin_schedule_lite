@@ -383,6 +383,7 @@ def everyone_entries(
         entries.append(
             {
                 "name": tt.owner_name or tt.owner_id,
+                "owner_id": tt.owner_id,
                 "type": status["type"],
                 "label": STATUS_LABEL.get(status["type"], ""),
                 "main": status["main"],
