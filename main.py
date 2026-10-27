@@ -13,7 +13,7 @@ iCalendar、拾光课程表 JSON、通用 JSON/CSV 都归一化成同一套数�
   /课表 删除                       删除自己的课表
   /课表 提醒 [分钟|关]             上课提醒（私聊）
   /课表 备注 <课程> [备注]          课程备注
-  /课表 翘课                       切换今日整日翘课状态
+  /课表 翘课                       切换当前/下一节翘课状态
   /课表 作息 [1 08:00-08:45 ...]   查看/修改个人作息
   /课表 请假 [日期/范围] [原因]     登记请假
   /课表 销假 [日期]                取消请假
@@ -75,6 +75,7 @@ try:
         everyone_report,
         format_day,
         format_rank,
+        is_abandoned,
         parse_query_date,
         status_now,
         timetables_of_group,
@@ -113,6 +114,7 @@ except ImportError:  # pragma: no cover - AstrBot 以脚本方式加载时
         everyone_report,
         format_day,
         format_rank,
+        is_abandoned,
         parse_query_date,
         status_now,
         timetables_of_group,
@@ -228,7 +230,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.4",
+    "v1.5.5",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1237,6 +1239,8 @@ class ScheduleLitePlugin(Star):
             tt.notified_date = old.notified_date
             tt.notified_keys = list(old.notified_keys)
             tt.abandon_date = old.abandon_date
+            tt.abandon_course = old.abandon_course
+            tt.abandon_start = old.abandon_start
             tt.groups = list(old.groups)
             tt.group_origins = dict(old.group_origins)
             names = {c.name for c in tt.courses}
@@ -1614,13 +1618,50 @@ class ScheduleLitePlugin(Star):
         if not tt:
             yield event.plain_result("你还没有绑定课表。发送 /课表 导入 <文件/链接/口令> 即可，或 /课表 帮助 导入 查看教程。")
             return
-        today = self._now().date().isoformat()
-        if tt.abandon_date == today:
+        now = self._now()
+        today = now.date()
+        now_min = now.hour * 60 + now.minute
+        items = day_entries(tt, today, self._calendar_for(today))
+        if not items:
+            yield event.plain_result("今天没有可翘的课。")
+            return
+
+        current = None
+        upcoming = None
+        for item in items:
+            start = minutes_of(item.start)
+            end = minutes_of(item.end)
+            if start is None or end is None:
+                continue
+            if start <= now_min < end:
+                current = item
+                break
+            if start > now_min and upcoming is None:
+                upcoming = item
+        target = current or upcoming
+        if target is None:
+            yield event.plain_result("今天的课已经结束了，没有可翘的课。")
+            return
+
+        same = (
+            tt.abandon_date == today.isoformat()
+            and tt.abandon_course == target.course.name
+            and (not tt.abandon_start or tt.abandon_start == target.start)
+        )
+        if same:
             tt.abandon_date = ""
-            message = "已取消今日翘课。"
+            tt.abandon_course = ""
+            tt.abandon_start = ""
+            message = f"已取消翘课：{target.course.name}。"
         else:
-            tt.abandon_date = today
-            message = "已设置今日翘课：今天所有课程都按翘课处理。"
+            tt.abandon_date = today.isoformat()
+            tt.abandon_course = target.course.name
+            tt.abandon_start = target.start
+            when = "当前" if current else "下一节"
+            message = (
+                f"已设置{when}翘课：{target.course.name} "
+                f"{target.start}-{target.end}（仅这一节生效）。"
+            )
         await self._save()
         yield event.plain_result(message)
 
@@ -3227,7 +3268,7 @@ class ScheduleLitePlugin(Star):
             local_now = now.astimezone(tz)
             today = local_now.date()
             now_min = local_now.hour * 60 + local_now.minute
-            if tt.leave_on(today) or tt.abandon_date == today.isoformat():
+            if tt.leave_on(today):
                 continue
             if tt.notified_date != today.isoformat():
                 tt.notified_date = today.isoformat()
@@ -3242,6 +3283,8 @@ class ScheduleLitePlugin(Star):
                     continue
                 delta = start_min - now_min
                 if delta < 0 or delta > tt.notify_minutes:
+                    continue
+                if is_abandoned(tt, course, start, today):
                     continue
                 notify_key = f"{course.name}|{start}"
                 if notify_key in tt.notified_keys:

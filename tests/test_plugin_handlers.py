@@ -327,6 +327,8 @@ def test_abandon_skips_notification(plugin):
     asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
     asyncio.run(_collect(plugin._h_notify(event, "15")))
     plugin.store.get(plugin._user_key(event)).abandon_date = "2026-09-08"
+    plugin.store.get(plugin._user_key(event)).abandon_course = "大学物理"
+    plugin.store.get(plugin._user_key(event)).abandon_start = "08:00"
 
     sent = []
 
@@ -337,6 +339,26 @@ def test_abandon_skips_notification(plugin):
     plugin._now = lambda: datetime(2026, 9, 8, 7, 50, tzinfo=get_tz("Asia/Shanghai"))
     asyncio.run(plugin._check_notifications())
     assert sent == []
+
+
+def test_abandon_targets_next_course(plugin):
+    from datetime import datetime
+
+    from schedule_lite_core.normalize import get_tz
+
+    event = _Event()
+    asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    plugin._now = lambda: datetime(2026, 9, 8, 7, 50, tzinfo=get_tz("Asia/Shanghai"))
+    out = asyncio.run(_collect(plugin._h_abandon(event)))
+    assert "下一节" in out[0]
+    tt = plugin.store.get(plugin._user_key(event))
+    assert tt.abandon_date == "2026-09-08"
+    assert tt.abandon_course == "大学物理"
+    assert tt.abandon_start == "08:00"
+
+    again = asyncio.run(_collect(plugin._h_abandon(event)))
+    assert "已取消" in again[0]
+    assert tt.abandon_course == ""
 
 
 def test_cross_group_privacy(plugin):
