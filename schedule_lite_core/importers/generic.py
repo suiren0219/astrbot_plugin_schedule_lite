@@ -173,6 +173,35 @@ def parse_json(
         if isinstance(raw, dict):
             courses.extend(_course_from_dict(raw))
 
+    # 本插件导出的通用 JSON 会带上请假 / 调课 / 补班记录，换设备导入时恢复
+    leaves: list[dict[str, Any]] = []
+    for item in wrapper.get("leaves") or []:
+        if isinstance(item, dict) and item.get("start"):
+            start = str(item.get("start") or "")
+            leaves.append(
+                {
+                    "start": start,
+                    "end": str(item.get("end") or start),
+                    "reason": str(item.get("reason") or ""),
+                }
+            )
+
+    adjustments: list[dict[str, Any]] = []
+    for item in wrapper.get("adjustments") or []:
+        if isinstance(item, dict) and item.get("from_date") and item.get("to_date"):
+            adjustments.append(dict(item))
+
+    makeup_days: dict[str, int] = {}
+    raw_makeup = wrapper.get("makeup_days")
+    if isinstance(raw_makeup, dict):
+        for key, value in raw_makeup.items():
+            try:
+                weekday = int(value)
+            except (TypeError, ValueError):
+                continue
+            if 1 <= weekday <= 7:
+                makeup_days[str(key)] = weekday
+
     return build_result(
         kind="json",
         source="通用 JSON",
@@ -182,6 +211,9 @@ def parse_json(
         sections=sections,
         courses=courses,
         warnings=[],
+        leaves=leaves,
+        adjustments=adjustments,
+        makeup_days=makeup_days,
         fallback_sections=fallback_sections,
         default_total_weeks=default_total_weeks,
         store_teacher=store_teacher,
