@@ -101,6 +101,8 @@ class Timetable:
     notified_keys: list[str] = field(default_factory=list)
     notes: dict[str, str] = field(default_factory=dict)
     abandon_date: str = ""
+    abandon_course: str = ""
+    abandon_start: str = ""
 
     # 记录用户在哪些群用过课表指令，用于群内排行/查看，避免依赖平台成员列表 API
     groups: list[str] = field(default_factory=list)
@@ -146,6 +148,8 @@ class Timetable:
             notified_keys=list(data.get("notified_keys") or []),
             notes={str(k): str(v) for k, v in (data.get("notes") or {}).items()},
             abandon_date=str(data.get("abandon_date") or ""),
+            abandon_course=str(data.get("abandon_course") or ""),
+            abandon_start=str(data.get("abandon_start") or ""),
             groups=[str(g) for g in (data.get("groups") or [])],
             group_origins={
                 str(k): str(v) for k, v in (data.get("group_origins") or {}).items()
