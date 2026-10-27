@@ -230,7 +230,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.7",
+    "v1.5.8",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -3103,6 +3103,15 @@ class ScheduleLitePlugin(Star):
             payload = await self._json_body()
             if not isinstance(payload, dict):
                 return self._err("请求内容不是对象")
+            # 新备份带 version；老备份没有这个字段，靠 users 结构兼容
+            backup_version = payload.get("version")
+            if backup_version is not None and _safe_int(backup_version, 0) != 1:
+                return self._err(
+                    f"备份版本不兼容（文件 version={backup_version}，本插件支持 1）"
+                )
+            plugin_name = str(payload.get("plugin") or "")
+            if plugin_name and plugin_name != PLUGIN_NAME:
+                return self._err(f"这不是本插件的备份文件（plugin={plugin_name}）")
             users = payload.get("users")
             if not isinstance(users, dict):
                 return self._err("备份内容缺少 users 字段")

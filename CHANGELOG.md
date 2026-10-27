@@ -2,6 +2,23 @@
 
 所有显著变更记录在此。格式参考 Keep a Changelog，版本遵循语义化版本。
 
+## v1.5.8 - 2026-10-27
+
+### 新增
+
+- 备份恢复新增校验：拒绝 `version` 不兼容或属于其他插件的备份文件；
+  无 `version` 的老备份仍然可以恢复
+- CI 增加静态检查作业：`_conf_schema.json` 与 i18n JSON 校验、Python 编译检查、
+  控制台脚本 `node --check`
+- 新增 tag 自动发布工作流：推送 `v*` tag 时校验 tag 与 `metadata.yaml` 版本一致，
+  用统一脚本打包并上传 ZIP 到 Release
+- 打包逻辑收敛到 `.github/build_zip.py`，本地与 CI 使用同一份文件清单
+
+### 变更
+
+- 清理面板与 README 里已移除的 `store_teacher` 残留引用
+- `/课表 学期` 成功提示改为统一显示第 1 周周一
+
 ## v1.5.7 - 2026-10-27
 
 ### 修复
