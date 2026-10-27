@@ -13,7 +13,7 @@ iCalendar、拾光课程表 JSON、通用 JSON/CSV 都归一化成同一套数�
   /课表 删除                       删除自己的课表
   /课表 提醒 [分钟|关]             上课提醒（私聊）
   /课表 备注 <课程> [备注]          课程备注
-  /课表 翘课                       切换今日翘课状态
+  /课表 翘课                       切换今日整日翘课状态
   /课表 作息 [1 08:00-08:45 ...]   查看/修改个人作息
   /课表 请假 [日期/范围] [原因]     登记请假
   /课表 销假 [日期]                取消请假
@@ -149,7 +149,7 @@ HELP_INDEX_TEXT = f"""📚 课表 Lite 帮助（先看分类）
 
 1. 导入与绑定：/课表 帮助 导入
 2. 查询课表：/课表 帮助 查询
-3. 请假 / 调课 / 调休：/课表 帮助 请假
+3. 翘课 / 请假 / 调课：/课表 帮助 请假
 4. 群友状态与排行：/课表 帮助 状态
 5. 提醒 / 隐私 / 修正：/课表 帮助 设置
 6. 控制台与定时节目：/课表 帮助 面板
@@ -172,7 +172,7 @@ HELP_CATEGORIES = {
     },
     "请假": {
         "title": "请假 / 调课 / 调休",
-        "headings": ("请假 / 销假", "调课", "节假日与调休"),
+        "headings": ("翘课", "请假 / 销假", "调课", "节假日与调休"),
         "aliases": ("请假", "销假", "调课", "调休", "补班", "leave", "adjust"),
     },
     "状态": {
@@ -228,7 +228,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.3",
+    "v1.5.4",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1620,7 +1620,7 @@ class ScheduleLitePlugin(Star):
             message = "已取消今日翘课。"
         else:
             tt.abandon_date = today
-            message = "已设置今日翘课。"
+            message = "已设置今日翘课：今天所有课程都按翘课处理。"
         await self._save()
         yield event.plain_result(message)
 
@@ -3227,7 +3227,7 @@ class ScheduleLitePlugin(Star):
             local_now = now.astimezone(tz)
             today = local_now.date()
             now_min = local_now.hour * 60 + local_now.minute
-            if tt.leave_on(today):
+            if tt.leave_on(today) or tt.abandon_date == today.isoformat():
                 continue
             if tt.notified_date != today.isoformat():
                 tt.notified_date = today.isoformat()
