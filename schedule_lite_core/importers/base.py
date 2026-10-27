@@ -94,9 +94,11 @@ def build_result(
     if declared and max_week > declared:
         warns.append(f"课程最晚到第 {max_week} 周，已把学期总周数放宽到 {total} 周")
 
+    meta_data = dict(meta or {})
     if term_start is None:
         term_start = monday_of(datetime.now(get_tz(tz)).date())
         warns.append("数据里没有开学日期，已按本周为第 1 周计算")
+        meta_data["term_start_guessed"] = True
 
     return ImportResult(
         source_kind=kind,
@@ -109,5 +111,5 @@ def build_result(
         merged=merged,
         dropped=dropped,
         warnings=warns,
-        meta=meta or {},
+        meta=meta_data,
     )
