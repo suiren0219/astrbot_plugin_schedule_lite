@@ -116,6 +116,8 @@ class Timetable:
     makeup_days: dict[str, int] = field(default_factory=dict)
     # 原始导入文件存档路径（相对插件数据目录），便于追溯与重新解析
     raw_source: str = field(default="")
+    # 导入数据里没有开学日期、按本周推算时置 True，后续查询会提醒用户修正
+    term_guessed: bool = False
     # 运行期索引，不写入 JSON
     _day_index: dict[int, list[Course]] | None = field(
         default=None, repr=False, compare=False
@@ -174,6 +176,7 @@ class Timetable:
                 if str(v).isdigit() and 1 <= int(v) <= 7
             },
             raw_source=str(data.get("raw_source") or ""),
+            term_guessed=bool(data.get("term_guessed")),
         )
 
     # ---------- 便捷方法 ----------

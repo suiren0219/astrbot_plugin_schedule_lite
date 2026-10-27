@@ -230,7 +230,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.6",
+    "v1.5.7",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -444,10 +444,15 @@ class ScheduleLitePlugin(Star):
         return paths
 
     async def _attach_avatars(self, entries: list[dict], timetables) -> list[dict]:
-        avatars = await self._avatar_paths(timetables)
-        for entry in entries:
-            entry["avatar"] = avatars.get(str(entry.get("owner_id") or ""), "")
-        return entries
+        # entries 可能来自 _entries_cache，必须复制后再写 avatar，避免污染缓存
+        return [
+            {
+                **entry,
+                "avatar": avatars.get(str(entry.get("owner_id") or ""), ""),
+            }
+            for avatars in [await self._avatar_paths(timetables)]
+            for entry in entries
+        ]
 
     # ---------------------------------------------------------- 节假日 / 定时节目
 
@@ -697,13 +702,18 @@ class ScheduleLitePlugin(Star):
             return 2048 * 1024
 
     def _store_teacher(self) -> bool:
-        return bool(self._cfg("store_teacher", False))
+        # 用户要求：教师一律不保存、不显示
+        return False
 
     def _store_location(self) -> bool:
-        return bool(self._cfg("store_location", False))
+        # 地点允许保存，供导出/后台查看；是否展示由 show_location 决定
+        return True
+
+    def _show_location(self) -> bool:
+        return bool(self._cfg("show_location", False))
 
     def _scrub_privacy(self) -> bool:
-        """配置关闭时清掉历史数据里的教师/地点，避免旧数据绕过隐私默认值。"""
+        """教师一律清掉；地点按展示开关决定是否保留。"""
         keep_teacher = self._store_teacher()
         keep_location = self._store_location()
         if keep_teacher and keep_location:
@@ -996,16 +1006,21 @@ class ScheduleLitePlugin(Star):
             )
             return
 
-        yield event.plain_result(
-            format_day(
-                tt,
-                target_date,
-                label=label,
-                show_teacher=self._store_teacher(),
-                today=self._now().date(),
-                holiday=self._calendar_for(target_date),
-            )
+        text = format_day(
+            tt,
+            target_date,
+            label=label,
+            show_teacher=self._store_teacher(),
+            show_location=self._show_location(),
+            today=self._now().date(),
+            holiday=self._calendar_for(target_date),
         )
+        if tt.term_guessed and not label:
+            text += (
+                "\n\n📅 这份课表的开学日期是按导入当天推算的。"
+                "如果周次对不上，发送 /课表 学期 2026-09-07 修正第 1 周周一。"
+            )
+        yield event.plain_result(text)
 
     @staticmethod
     def _messages(event):
@@ -1211,6 +1226,7 @@ class ScheduleLitePlugin(Star):
             imported_at=self._now().isoformat(timespec="seconds"),
             sections=result.sections,
             courses=result.courses,
+            term_guessed=bool(result.meta.get("term_start_guessed")),
         )
         removed_notes: list[str] = []
         if old:
@@ -1224,6 +1240,10 @@ class ScheduleLitePlugin(Star):
             tt.abandon_start = old.abandon_start
             tt.groups = list(old.groups)
             tt.group_origins = dict(old.group_origins)
+            # 重新导入不抹掉用户记录：请假 / 调课 / 补班原样保留
+            tt.leaves = list(old.leaves)
+            tt.adjustments = list(old.adjustments)
+            tt.makeup_days = dict(old.makeup_days)
             names = {c.name for c in tt.courses}
             for course_name, note in old.notes.items():
                 if course_name in names:
@@ -1295,6 +1315,12 @@ class ScheduleLitePlugin(Star):
             lines.append(f"⚠️ 另有 {len(result.warnings) - 4} 条提示未显示")
         if removed_notes:
             lines.append(f"ℹ️ 以下课程已不在新表中，备注已清除：{'、'.join(removed_notes[:5])}")
+        if result.meta.get("term_start_guessed"):
+            lines.append("")
+            lines.append("📅 这份课表没有写开学日期，暂时按本周为第 1 周计算。")
+            lines.append("请选择第 1 周周一，例如：")
+            lines.append("/课表 学期 2026-09-07")
+            lines.append("也可以直接发送日期，如 /课表 学期 9/7。")
         lines.append("发送 /课表 查看今天的课表。")
         yield event.plain_result("\n".join(lines))
 
@@ -1870,6 +1896,7 @@ class ScheduleLitePlugin(Star):
             yield event.plain_result("日期没看懂，示例：/课表 学期 2026-09-07")
             return
         tt.term_start = monday_of(target).isoformat()
+        tt.term_guessed = False
         await self._save()
         yield event.plain_result(
             f"已把第 1 周设为 {tt.term_start}（{monday_of(target):%Y/%m/%d}）。\n"
@@ -1987,7 +2014,7 @@ class ScheduleLitePlugin(Star):
             for tt, item in rows:
                 course = item.course
                 line = f" {tt.owner_name or tt.owner_id} · {course.name} {item.start}-{item.end}"
-                if course.location:
+                if course.location and self._show_location():
                     line += f" @{course.location}"
                 chain.append(At(qq=str(tt.owner_id)))
                 chain.append(Plain(line + "\n"))
@@ -2071,7 +2098,7 @@ class ScheduleLitePlugin(Star):
                                 f"{index}. {tt.owner_name or tt.owner_id} · "
                                 f"{course.name} {item.start}-{item.end}"
                             )
-                            if course.location:
+                            if course.location and self._show_location():
                                 line += f" @{course.location}"
                             lines.append(line)
                         chain = MessageChain().message("\n".join(lines))
@@ -2533,27 +2560,38 @@ class ScheduleLitePlugin(Star):
         )
 
     async def _h_countdown(self, event):
-        """重要日期倒计时：四六级、期末考试等，控制台「重要日期」里维护。"""
+        """假期倒计时：优先算最近的法定假期，另外附带控制台维护的重要日期。"""
         today = self._now().date()
-        if not self._events:
-            yield event.plain_result(
-                "🎯 还没有设置重要日期。\n"
-                "请在控制台的「重要日期」卡片里添加，比如四六级、期末考试，"
-                "早八推送里也会自动带上。"
-            )
-            return
-        upcoming = [item for item in self._events if item["date"] >= today.isoformat()]
-        past = len(self._events) - len(upcoming)
-        lines = ["🎯 重要日期倒计时"]
-        for item in upcoming[:12]:
-            day = date.fromisoformat(item["date"])
-            days = (day - today).days
+        lines = ["🏖 假期倒计时"]
+
+        # 最近的法定假期：跨年扫描节假日缓存，最多看一年
+        next_off = None
+        next_name = ""
+        for offset in range(0, 366):
+            day = today + timedelta(days=offset)
+            calendar = self._holidays.get(day.year) or self._load_holiday_cache(day.year)
+            if calendar is None or not calendar.days:
+                continue
+            if calendar.is_off(day):
+                next_off = day
+                next_name = calendar.label(day) or "假期"
+                break
+        if next_off is not None:
+            days = (next_off - today).days
             when = "就是今天" if days == 0 else f"还有 {days} 天"
-            lines.append(f"{day:%m/%d} {weekday_cn(day)} · {item['name']} · {when}")
-        if not upcoming:
-            lines.append("设置的重要日期都已过期。")
-        elif past:
-            lines.append(f"（另有 {past} 个已过期日期未显示）")
+            lines.append(f"🏮 {next_name} · {next_off:%m/%d} {weekday_cn(next_off)} · {when}")
+        else:
+            lines.append("🏮 暂时没有查到下一个法定假期，可在控制台刷新节假日缓存。")
+
+        upcoming = [item for item in self._events if item["date"] >= today.isoformat()]
+        if upcoming:
+            lines.append("")
+            lines.append("📅 其他重要日期")
+            for item in upcoming[:12]:
+                day = date.fromisoformat(item["date"])
+                days = (day - today).days
+                when = "就是今天" if days == 0 else f"还有 {days} 天"
+                lines.append(f"{day:%m/%d} {weekday_cn(day)} · {item['name']} · {when}")
         yield event.plain_result("\n".join(lines))
 
     # ---------------------------------------------------------- WebUI 控制台
@@ -2685,8 +2723,9 @@ class ScheduleLitePlugin(Star):
                         "source": calendar.source if calendar else "",
                     },
                     "config": {
-                        "store_teacher": self._store_teacher(),
+                        "store_teacher": False,
                         "store_location": self._store_location(),
+                        "show_location": self._show_location(),
                         "everyone_image": self._image_enabled("everyone_image"),
                         "help_image": self._image_enabled("help_image"),
                     },
@@ -2729,6 +2768,9 @@ class ScheduleLitePlugin(Star):
         if not name or not 1 <= day <= 7:
             return None
         weeks = parse_weeks(raw.get("weeks")) or []
+        if not weeks:
+            # 周次留空会让这门课永远不显示，按整学期兜底而不是静默丢弃
+            weeks = list(range(1, max(_safe_int(raw.get("total_weeks"), 20), 1) + 1))
         start = parse_time(raw.get("start")) or ""
         end = parse_time(raw.get("end")) or ""
         start_section = _safe_int(raw.get("start_section"), 0) or None
@@ -2835,6 +2877,11 @@ class ScheduleLitePlugin(Star):
                 if not owner_id:
                     return self._err("owner_id 不能为空")
                 key = f"{platform}:{owner_id}"
+            # 用户 ID 只允许数字/字母/-/_，特殊字符直接拒绝
+            if not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", owner_id):
+                return self._err("用户 ID 只能包含数字、字母、下划线和短横线")
+            if not re.fullmatch(r"[0-9A-Za-z_-]{1,32}", platform):
+                return self._err("平台名不合法")
             if len(key) > 128 or any(ch in key for ch in "\r\n\t"):
                 return self._err("key 不合法")
             old = self.store.get(key)
@@ -2861,14 +2908,23 @@ class ScheduleLitePlugin(Star):
                 )
             elif not tt.sections:
                 tt.sections = self._fallback_sections()
-            if not self._store_teacher():
-                for course in courses:
-                    course.teacher = ""
+            if owner_id and owner_id != tt.owner_id:
+                # 用户 ID 改动必须同步换存档 key，否则按 id 查不到这份数据
+                new_key = f"{platform}:{owner_id}"
+                if new_key != key and self.store.get(new_key) is not None:
+                    return self._err(f"用户 {owner_id} 已经有课表了，请先删除后再改 ID")
+                tt.owner_id = owner_id
+                if new_key != key:
+                    if old:
+                        self.store.delete(key)
+                    key = new_key
+                    old = self.store.get(key)
+            # 用户要求：教师一律不保存；地点可以保存，查询默认不显示
+            for course in courses:
+                course.teacher = ""
             if not self._store_location():
                 for course in courses:
                     course.location = ""
-            if owner_id:
-                tt.owner_id = owner_id
             tt.name = str(payload.get("name") or tt.name or "我的课表")
             tt.owner_name = str(payload.get("owner_name") or tt.owner_name)
             tt.term_start = monday_of(term).isoformat()
@@ -2976,7 +3032,11 @@ class ScheduleLitePlugin(Star):
             owner_id = str(payload.get("owner_id") or "").strip()
             if not owner_id:
                 return self._err("请填写用户 ID")
+            if not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", owner_id):
+                return self._err("用户 ID 只能包含数字、字母、下划线和短横线")
             platform = str(payload.get("platform") or "aiocqhttp").strip() or "aiocqhttp"
+            if not re.fullmatch(r"[0-9A-Za-z_-]{1,32}", platform):
+                return self._err("平台名不合法")
             key = str(payload.get("key") or "").strip() or f"{platform}:{owner_id}"
             owner_name = str(payload.get("owner_name") or "").strip()
             try:
@@ -3074,8 +3134,8 @@ class ScheduleLitePlugin(Star):
             return self._err(str(exc), 500)
 
     _SETTING_KEYS = (
-        "store_teacher",
         "store_location",
+        "show_location",
         "everyone_image",
         "avatar_enabled",
         "help_image",
@@ -3116,8 +3176,8 @@ class ScheduleLitePlugin(Star):
             if not isinstance(payload, dict):
                 return self._err("请求内容不是对象")
             bool_keys = {
-                "store_teacher",
                 "store_location",
+                "show_location",
                 "everyone_image",
                 "avatar_enabled",
                 "help_image",
@@ -3223,12 +3283,15 @@ class ScheduleLitePlugin(Star):
                 now,
                 hide_idle_over=self._hide_idle_over(),
             )
-            avatars = {
-                tt.owner_id: self._avatar_url(tt.owner_id)
-                for tt in timetables
-            }
-            for entry in entries:
-                entry["avatar"] = avatars.get(entry.get("owner_id", ""), "")
+            avatars = await self._avatar_paths(timetables)
+            for tt in timetables:
+                url = self._avatar_url(tt.owner_id)
+                if url:
+                    avatars.setdefault(tt.owner_id, url)
+            entries = [
+                {**entry, "avatar": avatars.get(entry.get("owner_id", ""), "")}
+                for entry in entries
+            ]
             return self._ok({"items": entries, "total": len(entries)})
         except Exception as exc:  # noqa: BLE001
             return self._err(str(exc), 500)
@@ -3294,7 +3357,7 @@ class ScheduleLitePlugin(Star):
                     "⏰ 上课提醒",
                     f"{course.name} {start}-{end}",
                 ]
-                if course.location:
+                if course.location and self._show_location():
                     lines.append(f"地点：{course.location}")
                 if tt.notify_minutes == 0:
                     lines.append("现在开始上课")

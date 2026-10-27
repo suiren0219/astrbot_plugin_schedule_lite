@@ -326,7 +326,7 @@
         users: 0, courses: 0, groups: 0, today, weekday,
         status_counts: {},
         holiday: { name: "", off: false, workday: false, source: "" },
-        config: { store_teacher: false, store_location: false, everyone_image: true, help_image: true },
+        config: { store_teacher: false, store_location: true, show_location: false, everyone_image: true, help_image: true },
       };
     }
     if (path === "live") return { items: [], total: 0 };
@@ -343,7 +343,7 @@
     if (path === "timetable") return { ...blankRecord(), key: (body && body.key) || "" };
     if (path === "settings") {
       return {
-        store_teacher: false, store_location: false, everyone_image: true, avatar_enabled: true, help_image: true,
+        store_location: true, show_location: false, everyone_image: true, avatar_enabled: true, help_image: true,
         everyone_page_size: 8, everyone_hide_idle_over: 12,
         showcase_enabled: false, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
@@ -914,8 +914,8 @@
         if (el.type === "checkbox") el.checked = Boolean(data[key]);
         else el.value = data[key] ?? "";
       };
-      set("#set-store-teacher", "store_teacher");
       set("#set-store-location", "store_location");
+      set("#set-show-location", "show_location");
       set("#set-everyone-image", "everyone_image");
       set("#set-avatar", "avatar_enabled");
       set("#set-help-image", "help_image");
@@ -952,7 +952,7 @@
   function eventRow(item = {}) {
     return `
       <div class="record-row event-row">
-        <label class="grow">名称<input class="input" data-field="name" value="${esc(item.name || "")}" placeholder="CET-6 / 期末考试"></label>
+        <label class="grow">名称<input class="input" data-field="name" value="${esc(item.name || "")}" placeholder="CET-6 / 寒假开始"></label>
         <label>日期<input class="input" type="date" data-field="date" value="${esc(item.date || "")}"></label>
         <button class="icon-btn remove" title="移除">✕</button>
       </div>`;
@@ -981,8 +981,8 @@
       return Number.isFinite(n) ? n : 0;
     };
     const payload = {
-      store_teacher: $("#set-store-teacher").checked,
       store_location: $("#set-store-location").checked,
+      show_location: $("#set-show-location").checked,
       everyone_image: $("#set-everyone-image").checked,
       avatar_enabled: $("#set-avatar").checked,
       help_image: $("#set-help-image").checked,

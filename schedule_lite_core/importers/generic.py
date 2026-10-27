@@ -317,6 +317,9 @@ def export_dict(tt) -> dict[str, Any]:
             }
             for c in tt.courses
         ],
+        "leaves": list(getattr(tt, "leaves", []) or []),
+        "adjustments": list(getattr(tt, "adjustments", []) or []),
+        "makeup_days": dict(getattr(tt, "makeup_days", {}) or {}),
     }
 
 
