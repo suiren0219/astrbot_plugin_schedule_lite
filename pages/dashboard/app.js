@@ -331,6 +331,15 @@
     }
     if (path === "live") return { items: [], total: 0 };
     if (path === "timetables") return { items: [], total: 0 };
+    if (path === "sections") {
+      return {
+        items: [
+          ["08:00", "08:45"], ["08:55", "09:40"], ["10:00", "10:45"], ["10:55", "11:40"],
+          ["14:00", "14:45"], ["14:55", "15:40"], ["16:00", "16:45"], ["16:55", "17:40"],
+          ["19:00", "19:45"], ["19:55", "20:40"], ["20:50", "21:35"], ["21:45", "22:30"],
+        ].map(([start, end], i) => ({ index: i + 1, start, end })),
+      };
+    }
     if (path === "timetable") return { ...blankRecord(), key: (body && body.key) || "" };
     if (path === "settings") {
       return {
@@ -642,6 +651,43 @@
     return { groups, origins };
   }
 
+  function formatSections(sections) {
+    if (!Array.isArray(sections)) return "";
+    return sections
+      .filter((s) => s && s.start && s.end)
+      .map((s) => `${s.index ?? ""} ${s.start}-${s.end}`.trim())
+      .join("\n");
+  }
+
+  function readSections() {
+    const text = $("#f-sections").value.trim();
+    if (!text) return [];
+    const result = [];
+    text.split(/\r?\n/).forEach((line, i) => {
+      const raw = line.trim();
+      if (!raw) return;
+      const match = raw.match(/^(\d+)\s+(\d{1,2}:\d{2})\s*[-~—]\s*(\d{1,2}:\d{2})/);
+      if (!match) return;
+      const pad = (v) => v.padStart(5, "0");
+      result.push({
+        index: Number(match[1]) || i + 1,
+        start: pad(match[2]),
+        end: pad(match[3]),
+      });
+    });
+    return result.sort((a, b) => a.index - b.index);
+  }
+
+  async function resetSections() {
+    try {
+      const data = await apiGet("sections");
+      $("#f-sections").value = formatSections(data.items || []);
+      toast("已填入内置默认作息");
+    } catch (err) {
+      toast(`读取默认作息失败：${err.message}`);
+    }
+  }
+
   async function openEditor(key = "") {
     try {
       const data = key ? await apiGet("timetable", { key }) : blankRecord();
@@ -657,6 +703,16 @@
       $("#f-term").value = data.term_start || mondayOf();
       $("#f-weeks").value = data.total_weeks || 20;
       $("#f-tz").value = data.timezone || "Asia/Shanghai";
+      let sections = Array.isArray(data.sections) ? data.sections : [];
+      if (!sections.length) {
+        try {
+          const fallback = await apiGet("sections");
+          sections = fallback.items || [];
+        } catch (err) {
+          sections = [];
+        }
+      }
+      $("#f-sections").value = formatSections(sections);
       state.courses = Array.isArray(data.courses) ? data.courses.slice() : [];
       state.adjustments = Array.isArray(data.adjustments) ? data.adjustments.slice() : [];
       renderCourses();
@@ -726,6 +782,7 @@
       total_weeks: Number($("#f-weeks").value || 20),
       timezone: $("#f-tz").value.trim() || "Asia/Shanghai",
       source: "控制面板",
+      sections: readSections(),
       courses,
       leaves: readLeaves(),
       adjustments: state.adjustments,
@@ -1056,6 +1113,11 @@
     });
   });
   $("#save-record").addEventListener("click", saveRecord);
+  $("#reset-sections").addEventListener("click", resetSections);
+  $("#clear-sections").addEventListener("click", () => {
+    $("#f-sections").value = "";
+    toast("已清空，保存后使用内置作息");
+  });
   $("#delete-record").addEventListener("click", () => deleteRecord(state.editingKey));
 
   function appendRecord(selector, html) {

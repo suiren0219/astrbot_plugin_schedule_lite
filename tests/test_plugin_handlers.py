@@ -1108,13 +1108,33 @@ def test_fallback_sections_shapes(plugin):
     assert len(plugin._fallback_sections()) >= 12
 
 
-def test_section_config_migration(plugin):
+def test_section_config_legacy_text_still_supported(plugin):
     plugin.config["default_section_times"] = "1 08:00-08:45\n2 08:55-09:40"
-    assert plugin._migrate_section_config() is True
-    value = plugin.config["default_section_times"]
-    assert isinstance(value, list) and value[0]["index"] == 1
     assert plugin._fallback_sections()[0].start == "08:00"
-    assert plugin._migrate_section_config() is False
+
+
+def test_sections_api_returns_defaults(plugin):
+    defaults = asyncio.run(plugin._api_sections())
+    assert defaults["status"] == "ok"
+    items = defaults["data"]["items"]
+    assert len(items) >= 12
+    assert items[0]["start"]
+
+
+def test_save_clears_sections_to_defaults(plugin):
+    import astrbot.api.web as web
+
+    web.request.body = {
+        "platform": "aiocqhttp",
+        "owner_id": "30001",
+        "term_start": "2026-09-07",
+        "sections": [],
+        "courses": [],
+    }
+    result = asyncio.run(plugin._api_timetable_save())
+    assert result["status"] == "ok"
+    stored = plugin.store.get("aiocqhttp:30001")
+    assert stored.sections and len(stored.sections) >= 12
 
 
 def _generic_import_payload(name="引用测试"):
