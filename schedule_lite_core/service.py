@@ -173,9 +173,15 @@ def day_courses(
     return [(item.course, item.start, item.end) for item in day_entries(tt, d, holiday)]
 
 
-def course_line(course: Course, start: str, end: str, show_teacher: bool = False) -> str:
+def course_line(
+    course: Course,
+    start: str,
+    end: str,
+    show_teacher: bool = False,
+    show_location: bool = False,
+) -> str:
     extras = []
-    if course.location:
+    if show_location and course.location:
         extras.append(course.location)
     if show_teacher and course.teacher:
         extras.append(course.teacher)
@@ -189,6 +195,7 @@ def format_day(
     *,
     label: str = "",
     show_teacher: bool = False,
+    show_location: bool = False,
     today: date | None = None,
     holiday=None,
 ) -> str:
@@ -251,7 +258,9 @@ def format_day(
         reason = str(leave.get("reason") or "")
         lines.append(f"📝 已请假{f'：{reason}' if reason else ''}")
     for item in items:
-        line = course_line(item.course, item.start, item.end, show_teacher)
+        line = course_line(
+            item.course, item.start, item.end, show_teacher, show_location
+        )
         marks = []
         if item.moved:
             marks.append("调课")
