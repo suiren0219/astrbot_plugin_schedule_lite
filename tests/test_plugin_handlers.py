@@ -318,6 +318,27 @@ def test_notification_once(plugin):
     assert len(sent) == 1  # 同一节课不重复提醒
 
 
+def test_abandon_skips_notification(plugin):
+    from datetime import datetime
+
+    from schedule_lite_core.normalize import get_tz
+
+    event = _Event()
+    asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    asyncio.run(_collect(plugin._h_notify(event, "15")))
+    plugin.store.get(plugin._user_key(event)).abandon_date = "2026-09-08"
+
+    sent = []
+
+    async def send(origin, chain):
+        sent.append(chain.text)
+
+    plugin.context = types.SimpleNamespace(send_message=send)
+    plugin._now = lambda: datetime(2026, 9, 8, 7, 50, tzinfo=get_tz("Asia/Shanghai"))
+    asyncio.run(plugin._check_notifications())
+    assert sent == []
+
+
 def test_cross_group_privacy(plugin):
     other = _Event(uid="10002", nick="李四")
     asyncio.run(_collect(plugin._h_import(other, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))

@@ -72,6 +72,23 @@ def test_status_now_abandoned():
     status = status_now(tt, datetime(2026, 9, 7, 8, 30, tzinfo=TZ))
     assert status["type"] == 2
     assert status["main"] == "高等数学"
+    assert "翘课" in status["sub"]
+
+    before = status_now(tt, datetime(2026, 9, 7, 7, 30, tzinfo=TZ))
+    assert before["type"] == 2
+    assert before["main"] == "今日翘课"
+
+    after = status_now(tt, datetime(2026, 9, 7, 20, 0, tzinfo=TZ))
+    assert after["type"] == 2
+    assert after["main"] == "今日翘课"
+
+
+def test_format_day_marks_all_courses_abandoned():
+    tt = make_timetable()
+    tt.abandon_date = "2026-09-07"
+    text = format_day(tt, datetime(2026, 9, 7).date())
+    assert "今日翘课（全部课程）" in text
+    assert "08:00-09:40 高等数学（翘课）" in text
 
 
 def test_day_courses_week_filter():
