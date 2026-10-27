@@ -5,9 +5,31 @@ on:
   pull_request:
 
 jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Validate JSON files
+        run: |
+          python -m json.tool _conf_schema.json > /dev/null
+          test -f .astrbot-plugin/i18n/zh-CN.json && python -m json.tool .astrbot-plugin/i18n/zh-CN.json > /dev/null
+          test -f .astrbot-plugin/i18n/en-US.json && python -m json.tool .astrbot-plugin/i18n/en-US.json > /dev/null
+      - name: Compile Python sources
+        run: python -m compileall -q main.py schedule_lite_core
+      - name: Check dashboard scripts
+        run: node --check pages/dashboard/app.js
+
   pytest:
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    needs: static
     strategy:
       fail-fast: false
       matrix:
