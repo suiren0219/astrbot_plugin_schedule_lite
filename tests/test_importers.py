@@ -498,6 +498,78 @@ def test_nexio_expired_code_message():
         raise AssertionError("过期口令应当报错")
 
 
+def test_nexio_share_code_uses_https_endpoint_first():
+    payload = {
+        "ok": True,
+        "code": "示例课表已上线",
+        "schedule_name": "默认课表",
+        "schedule_data": _nexio_payload(),
+    }
+    seen = []
+
+    async def fake_api_fetch(url):
+        seen.append(url)
+        return 200, json.dumps(payload, ensure_ascii=False)
+
+    async def fake_fetch(url):  # pragma: no cover - 不应该被调用
+        raise AssertionError("有 api_fetch 时不应回退到普通 fetch")
+
+    result = asyncio.run(
+        detect.import_any(
+            "分享口令为：示例课表已上线",
+            fetch=fake_fetch,
+            api_fetch=fake_api_fetch,
+        )
+    )
+    assert result.source_kind == "nexio"
+    assert seen and seen[0].startswith("https://nexioschedule.icu/api/share?code=")
+
+
+def test_nexio_share_code_falls_back_to_ip_endpoint():
+    payload = {
+        "ok": True,
+        "code": "示例课表已上线",
+        "schedule_name": "默认课表",
+        "schedule_data": _nexio_payload(),
+    }
+    seen = []
+
+    async def fake_api_fetch(url):
+        seen.append(url)
+        if url.startswith("https://nexioschedule.icu"):
+            raise RuntimeError("connection reset")
+        return 200, json.dumps(payload, ensure_ascii=False)
+
+    result = asyncio.run(
+        detect.import_any(
+            "示例课表已上线",
+            fetch=lambda url: None,
+            api_fetch=fake_api_fetch,
+        )
+    )
+    assert result.name == "默认课表"
+    assert len(seen) == 2
+    assert seen[1].startswith("http://182.92.193.223:3000/api/share?code=")
+
+
+def test_nexio_404_gives_clear_message():
+    async def fake_api_fetch(url):
+        return 404, '{"error":"口令不存在或已过期"}'
+
+    try:
+        asyncio.run(
+            detect.import_any(
+                "示例课表已上线",
+                fetch=lambda url: None,
+                api_fetch=fake_api_fetch,
+            )
+        )
+    except Exception as exc:
+        assert "口令不存在或已过期" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("404 应当报口令过期")
+
+
 def test_ics_location_contains_teacher():
     text = """BEGIN:VCALENDAR
 PRODID:-//Nexio Schedule//Course Schedule//CN

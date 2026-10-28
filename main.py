@@ -33,6 +33,7 @@ import os
 import re
 import socket
 import sys
+import time
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -230,7 +231,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.9",
+    "v1.5.10",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -258,6 +259,10 @@ class ScheduleLitePlugin(Star):
         # 按天分桶：换日即预构建当天快照；群成员与群 origin 走索引缓存
         self._group_index: dict[str, list[Timetable]] = {}
         self._origins_cache: dict[str, str] | None = None
+        # 群活跃记录：group_id:user_id -> 最近发言时间戳；用于「在上」过滤长期潜水的群友
+        self._activity: dict[str, float] = {}
+        self._activity_dirty = False
+        self._activity_task: asyncio.Task | None = None
 
     # ---------------------------------------------------------- 生命周期
 
@@ -273,6 +278,8 @@ class ScheduleLitePlugin(Star):
             logger.info(f"[{PLUGIN_NAME}] 已按隐私配置清除历史课表中的教师/地点")
         self._load_events()
         self._load_broadcast_state()
+        self._load_activity()
+        self._activity_task = asyncio.create_task(self._activity_loop())
         self._load_holiday_cache(self._now().year)
         if self._cfg("holiday_enabled", True):
             self._holiday_task = asyncio.create_task(self._holiday_loop())
@@ -282,7 +289,7 @@ class ScheduleLitePlugin(Star):
         logger.info(f"[{PLUGIN_NAME}] 已加载，共 {len(self.store.all())} 份课表")
 
     async def terminate(self):
-        for task_name in ("_notify_task", "_holiday_task"):
+        for task_name in ("_notify_task", "_holiday_task", "_activity_task"):
             task = getattr(self, task_name)
             if task:
                 task.cancel()
@@ -291,6 +298,10 @@ class ScheduleLitePlugin(Star):
                 except (asyncio.CancelledError, Exception):  # noqa: BLE001
                     pass
                 setattr(self, task_name, None)
+        try:
+            self._save_activity()
+        except Exception:  # noqa: BLE001
+            pass
         if self._http is not None:
             try:
                 await self._http.close()
@@ -377,6 +388,26 @@ class ScheduleLitePlugin(Star):
             return ""
         return f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100"
 
+    @staticmethod
+    def _avatar_image_ok(path: Path) -> bool:
+        try:
+            from PIL import Image
+
+            with Image.open(path) as image:
+                image.load()
+                return image.width >= 32 and image.height >= 32
+        except Exception:  # noqa: BLE001
+            return False
+
+    @staticmethod
+    def _avatar_sources(qq: str) -> list[str]:
+        return [
+            f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=640",
+            f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100",
+            f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec=640",
+            f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec=100",
+        ]
+
     async def _avatar_paths(self, timetables) -> dict[str, str]:
         """下载并缓存 QQ 头像；失败时静默回退首字母，不阻塞状态查询。"""
         if not self._avatar_enabled():
@@ -400,7 +431,11 @@ class ScheduleLitePlugin(Star):
             path = cache_dir / f"{qq}.png"
             try:
                 stat = path.stat()
-                if stat.st_size > 256 and now_ts - stat.st_mtime < 30 * 86400:
+                if (
+                    stat.st_size > 256
+                    and now_ts - stat.st_mtime < 30 * 86400
+                    and await asyncio.to_thread(self._avatar_image_ok, path)
+                ):
                     paths[owner_id] = str(path)
                     continue
             except OSError:
@@ -410,33 +445,66 @@ class ScheduleLitePlugin(Star):
             return paths
         try:
             import aiohttp
+            from PIL import Image
         except Exception:  # noqa: BLE001
             return paths
 
         semaphore = asyncio.Semaphore(12)
+        headers = {
+            "user-agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+            ),
+            "referer": "https://qzone.qq.com/",
+        }
+
+        async def normalize(data: bytes, path: Path) -> bool:
+            def save() -> bool:
+                from io import BytesIO
+
+                try:
+                    with Image.open(BytesIO(data)) as image:
+                        image.load()
+                        side = min(image.size)
+                        if side < 32:
+                            return False
+                        left = (image.width - side) // 2
+                        top = (image.height - side) // 2
+                        square = image.convert("RGB").crop(
+                            (left, top, left + side, top + side)
+                        )
+                        side = min(side, 320)
+                        square = square.resize((side, side), Image.LANCZOS)
+                        tmp = path.with_suffix(".tmp")
+                        square.save(tmp, "PNG")
+                        os.replace(tmp, path)
+                    return True
+                except Exception:  # noqa: BLE001
+                    return False
+
+            return await asyncio.to_thread(save)
 
         async def fetch(owner_id: str, qq: str, path: Path):
             async with semaphore:
-                try:
-                    timeout = aiohttp.ClientTimeout(total=3)
-                    async with self._http.get(
-                        f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100",
-                        timeout=timeout,
-                    ) as resp:
-                        if resp.status != 200:
+                timeout = aiohttp.ClientTimeout(total=5)
+                for url in self._avatar_sources(qq):
+                    try:
+                        async with self._http.get(
+                            url, headers=headers, timeout=timeout
+                        ) as resp:
+                            if resp.status != 200:
+                                continue
+                            data = await resp.read()
+                        if len(data) < 512:
+                            continue
+                        if await normalize(data, path):
+                            paths[owner_id] = str(path)
                             return
-                        data = await resp.read()
-                    if len(data) < 512:
-                        return
-                    tmp = path.with_suffix(".tmp")
-                    tmp.write_bytes(data)
-                    os.replace(tmp, path)
-                    paths[owner_id] = str(path)
-                except Exception as e:  # noqa: BLE001
-                    logger.debug(f"[{PLUGIN_NAME}] 获取头像 {qq} 失败: {e}")
+                    except Exception as e:  # noqa: BLE001
+                        logger.debug(f"[{PLUGIN_NAME}] 获取头像 {qq} 失败: {e}")
 
         tasks = [asyncio.create_task(fetch(*item)) for item in pending]
-        _, still_running = await asyncio.wait(tasks, timeout=4)
+        _, still_running = await asyncio.wait(tasks, timeout=8)
         for task in still_running:
             task.cancel()
         if still_running:
@@ -780,6 +848,90 @@ class ScheduleLitePlugin(Star):
             changed = True
         return changed
 
+    # ---------------------------------------------------------- 群活跃记录
+
+    def _activity_file(self) -> Path:
+        return self._plugin_data_dir() / "group_activity.json"
+
+    def _load_activity(self) -> None:
+        try:
+            payload = json.loads(self._activity_file().read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            payload = {}
+        raw = payload.get("seen") if isinstance(payload, dict) else None
+        if not isinstance(raw, dict):
+            raw = {}
+        cutoff = time.time() - 90 * 86400
+        self._activity = {
+            str(key): float(value)
+            for key, value in raw.items()
+            if isinstance(value, (int, float)) and float(value) >= cutoff
+        }
+
+    def _save_activity(self) -> None:
+        if not self._activity_dirty:
+            return
+        path = self._activity_file()
+        cutoff = time.time() - 90 * 86400
+        if len(self._activity) > 50000:
+            newest = sorted(self._activity.items(), key=lambda item: item[1], reverse=True)
+            self._activity = dict(newest[:50000])
+        self._activity = {
+            key: value for key, value in self._activity.items() if value >= cutoff
+        }
+        payload = {"version": 1, "seen": self._activity}
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(
+                json.dumps(payload, ensure_ascii=False, separators=(",", ":")),
+                encoding="utf-8",
+            )
+            tmp.replace(path)
+            self._activity_dirty = False
+        except OSError as exc:
+            logger.debug(f"[{PLUGIN_NAME}] 群活跃记录写入失败: {exc}")
+
+    async def _activity_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(120)
+                if self._activity_dirty:
+                    await asyncio.to_thread(self._save_activity)
+        except asyncio.CancelledError:
+            raise
+
+    def _mark_group_activity(self, group_id: str, user_id: str) -> None:
+        group_id = str(group_id or "").strip()
+        user_id = str(user_id or "").strip()
+        if not group_id or not user_id:
+            return
+        self._activity[f"{group_id}:{user_id}"] = time.time()
+        self._activity_dirty = True
+
+    def _everyone_active_days(self) -> int:
+        try:
+            days = int(self._cfg("everyone_active_days", 3))
+        except (TypeError, ValueError):
+            days = 3
+        return max(0, min(days, 30))
+
+    def _filter_active_members(self, timetables, group_id: str, now: datetime):
+        """只保留最近 N 天在本群发过言的人；没有记录的成员先不隐藏，避免升级后列表突然空掉。"""
+        days = self._everyone_active_days()
+        if days <= 0 or not group_id:
+            return list(timetables), 0
+        cutoff = now.timestamp() - days * 86400
+        kept = []
+        hidden = 0
+        for tt in timetables:
+            seen = self._activity.get(f"{group_id}:{tt.owner_id}")
+            if seen is not None and seen < cutoff:
+                hidden += 1
+                continue
+            kept.append(tt)
+        return kept, hidden
+
     async def _save(self) -> None:
         async with self._lock:
             self.store.save()
@@ -864,6 +1016,13 @@ class ScheduleLitePlugin(Star):
         event.stop_event()
         async for item in self._h_import(event, ""):
             yield item
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def cmd_track_group_activity(self, event):
+        """静默记录群成员最近发言时间，供 /课表 在上 过滤长期潜水成员。"""
+        group_id = event.get_group_id() or ""
+        if group_id:
+            self._mark_group_activity(group_id, self._sender_id(event))
 
     async def _dispatch(self, event, rest_override: str | None = None):
         rest = rest_override if rest_override is not None else self._rest(event)
@@ -1049,7 +1208,7 @@ class ScheduleLitePlugin(Star):
                 yield event.plain_result(ONBOARDING_TEXT)
                 return
             entries = self._cached_entries(f"u:{tt.owner_id}", [tt], now)
-            await self._attach_avatars(entries, [tt])
+            entries = await self._attach_avatars(entries, [tt])
             if self._image_enabled("everyone_image"):
                 pages = self._render_everyone(
                     entries,
@@ -1080,19 +1239,38 @@ class ScheduleLitePlugin(Star):
         # 自己刚在本群用过指令，即使没记录过群号也要算进来
         if tt and tt not in visible:
             visible.append(tt)
+        self._mark_group_activity(group_id, self._sender_id(event))
+        visible, inactive_hidden = self._filter_active_members(visible, group_id, now)
+        if tt and tt not in visible:
+            visible.append(tt)
         if not visible:
-            yield event.plain_result(
-                "本群还没有人绑定课表。\n"
-                "把 .ics 文件、分享口令或链接直接发给机器人即可加入；"
-                "发送 /课表 帮助 导入 查看图文教程。"
-            )
+            if inactive_hidden:
+                days = self._everyone_active_days()
+                yield event.plain_result(
+                    f"本群最近 {days} 天没有活跃的课表成员，已隐藏 {inactive_hidden} 人。\n"
+                    "可在插件控制台把「群友活跃天数」设为 0 关闭过滤。"
+                )
+            else:
+                yield event.plain_result(
+                    "本群还没有人绑定课表。\n"
+                    "把 .ics 文件、分享口令或链接直接发给机器人即可加入；"
+                    "发送 /课表 帮助 导入 查看图文教程。"
+                )
             return
 
         entries = self._cached_entries(
             f"g:{group_id}", visible, now, hide_idle_over=self._hide_idle_over()
         )
-        await self._attach_avatars(entries, visible)
+        entries = await self._attach_avatars(entries, visible)
         hidden = max(len(visible) - len(entries), 0)
+        hide_notes = []
+        if inactive_hidden:
+            hide_notes.append(f"{inactive_hidden} 位 {self._everyone_active_days()} 天未发言")
+        if hidden:
+            hide_notes.append(f"{hidden} 位无课同学")
+        footer_note = ""
+        if hide_notes:
+            footer_note = f"已隐藏 {' · '.join(hide_notes)} · 发送 /课表 查看自己的课表"
         if self._image_enabled("everyone_image"):
             pages = self._render_everyone(
                 entries,
@@ -1101,23 +1279,20 @@ class ScheduleLitePlugin(Star):
                     f"{now:%Y/%m/%d} {weekday_cn(now.date())} · "
                     f"{now:%H:%M} · 共 {len(entries)} 人"
                 ),
-                footer_note=(
-                    f"已隐藏 {hidden} 位无课同学 · 发送 /课表 查看自己的课表"
-                    if hidden
-                    else ""
-                ),
+                footer_note=footer_note,
             )
             if pages and await self._send_image_pages(event, pages, title="群友在上什么课"):
                 return
-        yield event.plain_result(
-            everyone_report(
-                visible,
-                now,
-                show_teacher=self._store_teacher(),
-                holiday=self._calendar_for(now.date()),
-                hide_idle_over=self._hide_idle_over(),
-            )
+        report = everyone_report(
+            visible,
+            now,
+            show_teacher=self._store_teacher(),
+            holiday=self._calendar_for(now.date()),
+            hide_idle_over=self._hide_idle_over(),
         )
+        if hide_notes:
+            report += f"\n\n已隐藏 {' · '.join(hide_notes)}"
+        yield event.plain_result(report)
 
     # ---------------------------------------------------------- 排行
 
@@ -1205,6 +1380,7 @@ class ScheduleLitePlugin(Star):
         result = await detect.import_any(
             raw,
             fetch=self._fetch,
+            api_fetch=self._fetch_api,
             session=self._http,
             fallback_sections=self._fallback_sections(),
             default_total_weeks=self._default_total_weeks(),
@@ -1230,34 +1406,22 @@ class ScheduleLitePlugin(Star):
         )
         removed_notes: list[str] = []
         if old:
+            # 再次导入 = 用新课表直接替换旧记录：课程、备注、请假、调课、补班、
+            # 翘课状态全部以新导入为准；只保留群绑定和提醒订阅，避免用户还要重新进群/设置提醒。
             tt.notify_minutes = old.notify_minutes
             tt.notify_enabled = old.notify_enabled
             tt.notify_origin = old.notify_origin
-            tt.notified_date = old.notified_date
-            tt.notified_keys = list(old.notified_keys)
-            tt.abandon_date = old.abandon_date
-            tt.abandon_course = old.abandon_course
-            tt.abandon_start = old.abandon_start
             tt.groups = list(old.groups)
             tt.group_origins = dict(old.group_origins)
-            # 重新导入不抹掉用户记录：请假 / 调课 / 补班原样保留
-            tt.leaves = list(old.leaves)
-            tt.adjustments = list(old.adjustments)
-            tt.makeup_days = dict(old.makeup_days)
-            names = {c.name for c in tt.courses}
-            for course_name, note in old.notes.items():
-                if course_name in names:
-                    tt.notes[course_name] = note
-                else:
-                    removed_notes.append(course_name)
-        else:
-            # 全新绑定：通用 JSON 里携带的请假/调课/补班记录直接带上（换设备迁移）
-            if result.leaves and not tt.leaves:
-                tt.leaves = list(result.leaves)
-            if result.adjustments and not tt.adjustments:
-                tt.adjustments = list(result.adjustments)
-            if result.makeup_days and not tt.makeup_days:
-                tt.makeup_days = dict(result.makeup_days)
+            result.meta["replaced_existing"] = True
+        # 新课表自带请假/调课/补班时一并带上（通用 JSON 换设备迁移）；
+        # 老课表的这些记录不再合并进来。
+        if result.leaves:
+            tt.leaves = list(result.leaves)
+        if result.adjustments:
+            tt.adjustments = list(result.adjustments)
+        if result.makeup_days:
+            tt.makeup_days = dict(result.makeup_days)
         if group_id:
             tt.remember_group(group_id, origin)
         raw_source = self._archive_raw_import(key, raw)
@@ -1315,6 +1479,8 @@ class ScheduleLitePlugin(Star):
             lines[-1] += f"（自动合并 {result.merged} 条重复）"
         if result.dropped:
             lines[-1] += f"（忽略 {result.dropped} 条异常）"
+        if result.meta.get("replaced_existing"):
+            lines.append("♻️ 已替换你之前的课表；旧的备注、请假、调课和翘课记录已清空。")
         if tt.sections:
             lines.append(f"作息：{len(tt.sections)} 节")
         for warning in result.warnings[:4]:
@@ -1488,7 +1654,8 @@ class ScheduleLitePlugin(Star):
             ):
                 raise ImportFailure("不允许访问内网地址；确实需要请打开 allow_private_network")
 
-    async def _fetch(self, url: str) -> str:
+    async def _fetch_raw(self, url: str) -> tuple[int, bytes]:
+        """下载 URL，返回状态码和原始字节；4xx/5xx 也把响应体带回来给调用方判断。"""
         if self._http is None:
             raise ImportFailure("网络组件未初始化，无法从链接导入")
         limit = self._max_file_bytes()
@@ -1503,6 +1670,7 @@ class ScheduleLitePlugin(Star):
         }
         current = url
         data = b""
+        status = 0
         followed = False
         for _ in range(4):  # 手动跟随重定向，每一跳都做一次内网检查
             await self._check_url(current)
@@ -1517,8 +1685,7 @@ class ScheduleLitePlugin(Star):
                         current = urljoin(current, location)
                         followed = True
                         continue
-                    if resp.status >= 400:
-                        raise ImportFailure(f"链接下载失败：HTTP {resp.status}")
+                    status = resp.status
                     data = await resp.content.read(limit + 1)
                     break
             except ImportFailure:
@@ -1529,8 +1696,20 @@ class ScheduleLitePlugin(Star):
             raise ImportFailure("链接重定向次数过多，或重定向后没有内容")
         if len(data) > limit:
             raise ImportFailure(f"文件太大，上限 {limit // 1024} KB")
+        return status, data
+
+    async def _fetch(self, url: str) -> str:
+        status, data = await self._fetch_raw(url)
+        if status >= 400:
+            raise ImportFailure(f"链接下载失败：HTTP {status}")
         text = self._decode_bytes(data)
         return text if text is not None else data.decode("utf-8", errors="replace")
+
+    async def _fetch_api(self, url: str) -> tuple[int, str]:
+        """给 Nexio 等 JSON 口令接口用：错误响应体也要保留，便于显示真实原因。"""
+        status, data = await self._fetch_raw(url)
+        text = self._decode_bytes(data)
+        return status, text if text is not None else data.decode("utf-8", errors="replace")
 
     @staticmethod
     def _decode_bytes(data: bytes) -> str | None:
@@ -3065,6 +3244,7 @@ class ScheduleLitePlugin(Star):
                     "distinct": len({c.name for c in tt.courses}),
                     "merged": result.merged,
                     "dropped": result.dropped,
+                    "replaced_existing": bool(result.meta.get("replaced_existing")),
                     "warnings": list(result.warnings[:4]),
                 }
             )
@@ -3159,6 +3339,7 @@ class ScheduleLitePlugin(Star):
         "image_width",
         "everyone_page_size",
         "everyone_hide_idle_over",
+        "everyone_active_days",
         "showcase_enabled",
         "showcase_time",
         "showcase_min_minutes",
@@ -3206,6 +3387,7 @@ class ScheduleLitePlugin(Star):
                 "image_width",
                 "everyone_page_size",
                 "everyone_hide_idle_over",
+                "everyone_active_days",
                 "showcase_min_minutes",
                 "showcase_min_users",
                 "recap_weekday",
