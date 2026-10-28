@@ -231,7 +231,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.10",
+    "v1.5.11",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -3467,31 +3467,73 @@ class ScheduleLitePlugin(Star):
         except Exception as exc:  # noqa: BLE001
             return self._err(str(exc), 500)
 
+    async def _live_entries(self, timetables, now: datetime, avatars=None) -> list[dict]:
+        entries = self._cached_entries(
+            "api",
+            timetables,
+            now,
+            hide_idle_over=self._hide_idle_over(),
+        )
+        if avatars is None:
+            avatars = await self._avatar_paths(timetables)
+        else:
+            avatars = dict(avatars)
+        for tt in timetables:
+            url = self._avatar_url(tt.owner_id)
+            if url:
+                avatars.setdefault(tt.owner_id, url)
+        return [
+            {**entry, "avatar": avatars.get(entry.get("owner_id", ""), "")}
+            for entry in entries
+        ]
+
     async def _api_live(self):
         try:
             group_id = self._query("group").strip()
             now = self._now()
-            timetables = (
-                self._group_timetables(group_id)
-                if group_id
-                else list(self.store.all().values())
+            all_timetables = list(self.store.all().values())
+            if group_id:
+                timetables = [
+                    tt for tt in all_timetables if group_id in tt.groups
+                ]
+                entries = await self._live_entries(timetables, now)
+                return self._ok({"items": entries, "total": len(entries), "groups": []})
+
+            # 同一份课表可能绑了多个群，按群分组时会分别出现在每个群里；
+            # 没有群记录的课表单独归到「未绑定群」。
+            grouped: dict[str, list[Timetable]] = {}
+            for tt in all_timetables:
+                groups = [str(gid) for gid in tt.groups if gid]
+                if not groups:
+                    grouped.setdefault("", []).append(tt)
+                for gid in dict.fromkeys(groups):
+                    grouped.setdefault(gid, []).append(tt)
+
+            def group_order(item):
+                gid = item[0]
+                return (gid == "", int(gid) if gid.isdigit() else 10**18, gid)
+
+            avatars = await self._avatar_paths(all_timetables)
+            payload_groups = []
+            for gid, timetables in sorted(grouped.items(), key=group_order):
+                items = await self._live_entries(timetables, now, avatars)
+                payload_groups.append(
+                    {
+                        "id": gid,
+                        "name": f"群 {gid}" if gid else "未绑定群",
+                        "total": len(items),
+                        "items": items,
+                    }
+                )
+
+            flat = await self._live_entries(all_timetables, now, avatars)
+            return self._ok(
+                {
+                    "items": flat,
+                    "total": len(flat),
+                    "groups": payload_groups,
+                }
             )
-            entries = self._cached_entries(
-                "api",
-                timetables,
-                now,
-                hide_idle_over=self._hide_idle_over(),
-            )
-            avatars = await self._avatar_paths(timetables)
-            for tt in timetables:
-                url = self._avatar_url(tt.owner_id)
-                if url:
-                    avatars.setdefault(tt.owner_id, url)
-            entries = [
-                {**entry, "avatar": avatars.get(entry.get("owner_id", ""), "")}
-                for entry in entries
-            ]
-            return self._ok({"items": entries, "total": len(entries)})
         except Exception as exc:  # noqa: BLE001
             return self._err(str(exc), 500)
 

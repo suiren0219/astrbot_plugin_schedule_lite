@@ -781,6 +781,34 @@ def test_web_api_overview_and_live(plugin):
     assert live["data"]["items"][0]["name"] == "张三"
 
 
+def test_web_api_live_groups_by_group(plugin):
+    import astrbot.api.web as web
+
+    first = _import_sample(plugin, _Event("/课表 导入", uid="10001", nick="张三", group="1001"))
+    _import_sample(plugin, _Event("/课表 导入", uid="10002", nick="李四", group="1002"))
+    _import_sample(plugin, _Event("/课表 导入", uid="10003", nick="王五"))
+
+    # 同一份课表可以同时属于多个群，分组时应分别出现
+    plugin.store.get(plugin._user_key(first)).groups.append("1002")
+
+    web.request.args = {}
+    live = asyncio.run(plugin._api_live())
+    assert live["status"] == "ok"
+    assert live["data"]["total"] == 3
+    groups = {item["id"]: item for item in live["data"]["groups"]}
+    assert set(groups) == {"1001", "1002", ""}
+    assert {row["name"] for row in groups["1001"]["items"]} == {"张三"}
+    assert {row["name"] for row in groups["1002"]["items"]} == {"张三", "李四"}
+    assert {row["name"] for row in groups[""]["items"]} == {"王五"}
+    assert groups[""]["name"] == "未绑定群"
+
+    web.request.args = {"group": "1001"}
+    filtered = asyncio.run(plugin._api_live())
+    assert filtered["data"]["total"] == 1
+    assert filtered["data"]["items"][0]["name"] == "张三"
+    assert filtered["data"]["groups"] == []
+
+
 def _scheduled_plugin(tmp_path, config):
     import main as plugin_main
     from schedule_lite_core.model import Course, Timetable

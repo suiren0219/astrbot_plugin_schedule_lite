@@ -13,9 +13,9 @@
   --miuix-amber: #d97706;
   --miuix-amber-text: #b77900;
   --miuix-red: #dc2626;
-  --miuix-soft: var(--miuix-soft);
-  --miuix-soft-2: var(--miuix-soft-2);
-  --miuix-chip: var(--miuix-chip);
+  --miuix-soft: rgba(20, 24, 35, .045);
+  --miuix-soft-2: rgba(20, 24, 35, .075);
+  --miuix-chip: rgba(20, 24, 35, .06);
   --miuix-toast: rgba(24, 27, 34, .92);
   --miuix-shadow: 0 18px 50px rgba(20, 28, 50, .08), 0 2px 8px rgba(20, 28, 50, .04);
   --miuix-radius: 28px;
@@ -162,6 +162,12 @@ button, input, select { font: inherit; color: inherit; }
 select.input { min-width: 110px; }
 
 .live-list { display: grid; gap: 10px; }
+.live-group { display: grid; gap: 10px; }
+.live-group + .live-group { margin-top: 8px; padding-top: 18px; border-top: 1px solid var(--miuix-line); }
+.live-group-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 0 4px; }
+.live-group-head b { font-size: 15px; }
+.live-group-head span { padding: 4px 10px; border-radius: 999px; background: var(--miuix-soft-2); color: var(--miuix-text-2); font-size: 12px; font-weight: 650; }
+.live-group-body { display: grid; gap: 8px; }
 .live-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 18px; background: var(--miuix-soft); }
 .avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--miuix-accent-soft); color: var(--miuix-accent); font-weight: 750; flex: none; position: relative; overflow: hidden; }
 .avatar b { font-weight: 750; }

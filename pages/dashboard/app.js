@@ -416,18 +416,39 @@
   async function loadLive() {
     try {
       const data = await apiGet("live");
+      const groups = data.groups || [];
+      if (groups.length) {
+        $("#live-list").innerHTML = groups.map((group) => {
+          const items = group.items || [];
+          return `
+            <section class="live-group">
+              <div class="live-group-head">
+                <b>${esc(group.name || group.id || "未分组")}</b>
+                <span>${items.length} 人</span>
+              </div>
+              <div class="live-group-body">
+                ${items.length ? items.map(liveRow).join("") : '<div class="empty">该群暂时没有可展示的课表</div>'}
+              </div>
+            </section>`;
+        }).join("");
+        return;
+      }
       const items = data.items || [];
       $("#live-list").innerHTML = items.length
-        ? items.map((item) => `
-          <div class="live-row">
-            ${avatarTag(item.name, item.avatar)}
-            <div class="live-main"><b>${esc(item.name)}</b><small>${esc(item.main || "")}${item.sub ? " · " + esc(item.sub) : ""}</small></div>
-            <span class="pill t${item.type}">${esc(item.label)}</span>
-          </div>`).join("")
-        : '<div class="empty">本群还没有人导入课表</div>';
+        ? items.map(liveRow).join("")
+        : '<div class="empty">还没有人导入课表</div>';
     } catch (err) {
       $("#live-list").innerHTML = `<div class="empty">状态读取失败：${esc(err.message)}</div>`;
     }
+  }
+
+  function liveRow(item) {
+    return `
+      <div class="live-row">
+        ${avatarTag(item.name, item.avatar)}
+        <div class="live-main"><b>${esc(item.name)}</b><small>${esc(item.main || "")}${item.sub ? " · " + esc(item.sub) : ""}</small></div>
+        <span class="pill t${item.type}">${esc(item.label)}</span>
+      </div>`;
   }
 
   /* ---------------------------------------------------------------- records */
