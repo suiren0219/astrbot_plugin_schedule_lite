@@ -12,6 +12,7 @@ from . import generic, ics, nexio, shiguang, wakeup
 from .base import ImportFailure, ImportResult
 
 Fetch = Callable[..., Awaitable[str]]
+ApiFetch = Callable[[str], Awaitable[tuple[int, str]]]
 
 HELP = (
     "支持这些导入方式：\n"
@@ -146,6 +147,7 @@ async def import_any(
     raw: str,
     *,
     fetch: Fetch,
+    api_fetch: ApiFetch | None = None,
     fallback_sections: list[Section] | None = None,
     default_total_weeks: int = 20,
     store_teacher: bool = False,
@@ -195,6 +197,7 @@ async def import_any(
         return await nexio.import_code(
             nexio_code,
             fetch=fetch,
+            api_fetch=api_fetch,
             fallback_sections=fallback_sections,
             default_total_weeks=default_total_weeks,
             store_teacher=store_teacher,
@@ -233,6 +236,7 @@ async def import_any(
         return await nexio.import_code(
             nexio_code,
             fetch=fetch,
+            api_fetch=api_fetch,
             fallback_sections=fallback_sections,
             default_total_weeks=default_total_weeks,
             store_teacher=store_teacher,

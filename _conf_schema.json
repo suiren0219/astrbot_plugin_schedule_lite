@@ -142,6 +142,17 @@
       "step": 1
     }
   },
+  "everyone_active_days": {
+    "description": "👥 群友活跃天数过滤",
+    "type": "int",
+    "default": 3,
+    "hint": "「/课表 在上」只显示最近 N 天在本群发过言的成员；0 表示关闭。升级后尚未记录发言的成员会先保留，不会突然消失。",
+    "slider": {
+      "min": 0,
+      "max": 30,
+      "step": 1
+    }
+  },
   "holiday_enabled": {
     "description": "📅 启用国务院节假日/调休",
     "type": "bool",

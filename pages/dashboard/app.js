@@ -327,6 +327,7 @@
         status_counts: {},
         holiday: { name: "", off: false, workday: false, source: "" },
         config: { store_location: true, show_location: false, everyone_image: true, help_image: true },
+
       };
     }
     if (path === "live") return { items: [], total: 0 };
@@ -344,7 +345,7 @@
     if (path === "settings") {
       return {
         store_location: true, show_location: false, everyone_image: true, avatar_enabled: true, help_image: true,
-        everyone_page_size: 8, everyone_hide_idle_over: 12,
+        everyone_page_size: 8, everyone_hide_idle_over: 12, everyone_active_days: 3,
         showcase_enabled: false, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
         holiday_enabled: true, holiday_api_url: "https://timor.tech/api/holiday/year/{year}",
@@ -874,8 +875,9 @@
     button.disabled = true;
     try {
       const data = await apiPost("import", payload);
+      const replaced = data.replaced_existing ? "（已替换旧课表）" : "";
       toast(
-        `已导入「${data.name || payload.owner_id}」：` +
+        `已导入「${data.name || payload.owner_id}」${replaced}：` +
         `${data.distinct ?? data.course_count ?? 0} 门课 / ${data.course_count ?? 0} 条安排`
       );
       $("#import-text").value = "";
@@ -956,6 +958,7 @@
       set("#set-avatar", "avatar_enabled");
       set("#set-help-image", "help_image");
       set("#set-hide-idle", "everyone_hide_idle_over");
+      set("#set-active-days", "everyone_active_days");
       set("#set-page-size", "everyone_page_size");
       set("#set-showcase", "showcase_enabled");
       set("#set-showcase-time", "showcase_time");
@@ -1023,6 +1026,7 @@
       avatar_enabled: $("#set-avatar").checked,
       help_image: $("#set-help-image").checked,
       everyone_hide_idle_over: num("#set-hide-idle"),
+      everyone_active_days: num("#set-active-days"),
       everyone_page_size: num("#set-page-size"),
       showcase_enabled: $("#set-showcase").checked,
       showcase_time: $("#set-showcase-time").value.trim(),
