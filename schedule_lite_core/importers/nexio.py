@@ -24,7 +24,13 @@ from ..model import Course, Section
 from ..normalize import parse_date, parse_time
 from .base import ImportFailure, ImportResult, build_result
 
-SHARE_URL = "http://182.92.193.223:3000/api/share"
+# 官方域名走 HTTPS，兼容部分网络封禁 IP 直连 3000 端口的情况；
+# 原来的 IP 直连保留为兜底，两者由 Nexio App 共用同一套后端。
+SHARE_URLS = (
+    "https://nexioschedule.icu/api/share",
+    "http://182.92.193.223:3000/api/share",
+)
+SHARE_URL = SHARE_URLS[0]
 
 # 趣味口令：中文短语为主，也兼容字母数字；排除明显不是口令的内容。
 _CODE_RE = re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9_-]{2,64}$")
@@ -243,6 +249,7 @@ async def import_code(
     code: str,
     *,
     fetch,
+    api_fetch=None,
     fallback_sections: list[Section] | None = None,
     default_total_weeks: int = 20,
     store_teacher: bool = False,
@@ -252,36 +259,81 @@ async def import_code(
     clean = _clean_code(code)
     if not clean:
         raise ImportFailure("Nexio 分享口令是空的")
-    url = f"{SHARE_URL}?code={quote(clean, safe='')}"
-    try:
-        text = await fetch(url)
-    except ImportFailure:
-        raise
-    except Exception as exc:  # noqa: BLE001
-        raise ImportFailure(f"Nexio 口令服务连接失败：{exc}") from exc
-    if not text or not text.strip():
-        raise ImportFailure("Nexio 口令服务没有返回内容")
-    try:
-        obj = json.loads(text)
-    except ValueError as exc:
-        raise ImportFailure("Nexio 口令服务返回的不是有效 JSON") from exc
+    encoded = quote(clean, safe="")
+    last_error = ""
+    for base in SHARE_URLS:
+        url = f"{base}?code={encoded}"
+        try:
+            if api_fetch is not None:
+                status, text = await api_fetch(url)
+                status = int(status or 0)
+            else:
+                text = await fetch(url)
+                status = 200
+        except ImportFailure as exc:
+            message = str(exc)
+            if "不允许访问" in message:
+                raise
+            if "HTTP 404" in message:
+                raise ImportFailure(
+                    "Nexio 分享口令不存在或已过期（口令 30 分钟内有效）"
+                ) from exc
+            if "HTTP 429" in message:
+                raise ImportFailure("Nexio 口令服务请求过于频繁，请稍后再试") from exc
+            last_error = message
+            continue
+        except Exception as exc:  # noqa: BLE001
+            last_error = f"连接失败：{exc}"
+            continue
 
-    if not isinstance(obj, dict) or not obj.get("ok"):
-        reason = ""
-        if isinstance(obj, dict):
-            reason = str(obj.get("error") or "").strip()
-        raise ImportFailure(reason or "Nexio 分享口令不存在或已过期（口令 30 分钟内有效）")
-    data = obj.get("schedule_data")
-    if not isinstance(data, dict):
-        raise ImportFailure("Nexio 口令里没有课表数据")
+        text = str(text or "")
+        if not text.strip():
+            last_error = "口令服务没有返回内容"
+            continue
+        if status == 404:
+            raise ImportFailure("Nexio 分享口令不存在或已过期（口令 30 分钟内有效）")
+        if status == 429:
+            raise ImportFailure("Nexio 口令服务请求过于频繁，请稍后再试")
+        try:
+            obj = json.loads(text)
+        except ValueError:
+            if status >= 500:
+                last_error = f"口令服务暂时不可用（HTTP {status}）"
+                continue
+            last_error = "Nexio 口令服务返回的不是有效 JSON"
+            continue
 
-    return parse_export(
-        obj,
-        fallback_sections=fallback_sections,
-        default_total_weeks=default_total_weeks,
-        store_teacher=store_teacher,
-        store_location=store_location,
-        tz=tz,
-        name=str(obj.get("schedule_name") or "Nexio 分享课表"),
-        source="Nexio 分享口令",
-    )
+        if status >= 400:
+            reason = ""
+            if isinstance(obj, dict):
+                reason = str(obj.get("error") or "").strip()
+            if reason:
+                raise ImportFailure(reason)
+            if status >= 500:
+                last_error = f"口令服务暂时不可用（HTTP {status}）"
+                continue
+            raise ImportFailure(f"Nexio 口令服务返回 HTTP {status}")
+
+        if not isinstance(obj, dict) or not obj.get("ok"):
+            reason = ""
+            if isinstance(obj, dict):
+                reason = str(obj.get("error") or "").strip()
+            raise ImportFailure(
+                reason or "Nexio 分享口令不存在或已过期（口令 30 分钟内有效）"
+            )
+        data = obj.get("schedule_data")
+        if not isinstance(data, dict):
+            raise ImportFailure("Nexio 口令里没有课表数据")
+
+        return parse_export(
+            obj,
+            fallback_sections=fallback_sections,
+            default_total_weeks=default_total_weeks,
+            store_teacher=store_teacher,
+            store_location=store_location,
+            tz=tz,
+            name=str(obj.get("schedule_name") or "Nexio 分享课表"),
+            source="Nexio 分享口令",
+        )
+
+    raise ImportFailure(last_error or "Nexio 口令服务连接失败，请稍后再试")

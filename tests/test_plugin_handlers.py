@@ -493,12 +493,14 @@ def test_query_without_timetable_shows_onboarding(plugin):
 
 
 def test_avatar_cache_and_fallback(plugin, tmp_path):
+    from PIL import Image
+
     from schedule_lite_core.model import Timetable
 
     avatar_dir = tmp_path / "cache" / "avatars"
     avatar_dir.mkdir(parents=True)
     cached = avatar_dir / "123456.png"
-    cached.write_bytes(b"x" * 1024)
+    Image.new("RGB", (120, 120), (30, 90, 200)).save(cached, "PNG")
 
     tt = Timetable(owner_id="123456", owner_name="张三")
     paths = asyncio.run(plugin._avatar_paths([tt]))
@@ -513,6 +515,64 @@ def test_avatar_cache_and_fallback(plugin, tmp_path):
     assert plugin._avatar_url("123456").endswith("nk=123456&s=100")
     assert plugin._avatar_url("not-a-qq") == ""
 
+
+def test_everyone_passes_cached_avatar_to_renderer(image_plugin, tmp_path):
+    from PIL import Image
+
+    avatar_dir = tmp_path / "cache" / "avatars"
+    avatar_dir.mkdir(parents=True)
+    Image.new("RGB", (120, 120), (30, 90, 200)).save(avatar_dir / "10001.png", "PNG")
+
+    event = _Event("/课表 导入", group="g1")
+    asyncio.run(_collect(image_plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    captured = {}
+
+    def fake_render(entries, **_kwargs):
+        captured["entries"] = entries
+        return []
+
+    image_plugin._render_everyone = fake_render
+    asyncio.run(_collect(image_plugin._h_everyone(event)))
+    assert captured["entries"]
+    assert captured["entries"][0]["avatar"].endswith("10001.png")
+
+
+def test_everyone_hides_inactive_group_members(plugin):
+    first = _Event("/课表 导入", uid="10001", nick="张三", group="g1")
+    second = _Event("/课表 导入", uid="10002", nick="李四", group="g1")
+    asyncio.run(_collect(plugin._h_import(first, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    asyncio.run(_collect(plugin._h_import(second, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    plugin.config["everyone_active_days"] = 3
+
+    now = plugin._now().timestamp()
+    plugin._activity = {
+        "g1:10001": now,
+        "g1:10002": now - 4 * 86400,
+    }
+    out = asyncio.run(_collect(plugin._h_everyone(first)))
+    assert "张三" in out[0]
+    assert "李四" not in out[0]
+    assert "未发言" in out[0]
+
+    # 当前发指令的人即使很久没说话，也要保留在结果里
+    plugin._activity["g1:10001"] = now - 10 * 86400
+    out = asyncio.run(_collect(plugin._h_everyone(first)))
+    assert "张三" in out[0]
+
+
+
+def test_group_activity_persists(plugin, tmp_path):
+    plugin._mark_group_activity("g1", "12345")
+    assert plugin._activity_dirty
+    plugin._save_activity()
+    assert not plugin._activity_dirty
+    assert (tmp_path / "group_activity.json").exists()
+
+    plugin._activity.clear()
+    plugin._load_activity()
+    assert "g1:12345" in plugin._activity
+    assert plugin._everyone_active_days() == 3
 
 def test_everyone_sends_image(image_plugin, tmp_path):
     from schedule_lite_core import render
@@ -1326,9 +1386,8 @@ def test_events_api_and_countdown(plugin):
     assert "CET-6" in outs[0]
 
 
-def test_import_preserves_leaves_adjustments_makeup(plugin):
-    from schedule_lite_core.model import Timetable
-
+def test_import_replaces_old_records(plugin):
+    """已绑定账号再次导入时，旧课表的个人记录随旧表一起被替换。"""
     event = _import_sample(plugin)
     key = plugin._user_key(event)
     tt = plugin.store.get(key)
@@ -1337,13 +1396,18 @@ def test_import_preserves_leaves_adjustments_makeup(plugin):
         {"from_date": "2026-09-11", "to_date": "2026-09-12", "course": "", "swap": False, "courses": []}
     ]
     tt.makeup_days = {"2026-10-10": 4}
+    tt.notes = {"高等数学": "带计算器"}
+    tt.abandon_date = "2026-09-07"
+    tt.abandon_course = "高等数学"
     asyncio.run(plugin._save())
 
     asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
     again = plugin.store.get(key)
-    assert again.leaves and again.leaves[0]["reason"] == "病假"
-    assert again.adjustments and again.adjustments[0]["to_date"] == "2026-09-12"
-    assert again.makeup_days == {"2026-10-10": 4}
+    assert again.leaves == []
+    assert again.adjustments == []
+    assert again.makeup_days == {}
+    assert again.notes == {}
+    assert again.abandon_course == ""
 
 
 def test_teacher_always_dropped_location_kept(plugin):
@@ -1419,11 +1483,11 @@ def test_export_import_roundtrip_keeps_records(plugin):
     assert migrated.adjustments[0]["to_date"] == "2026-09-12"
     assert migrated.makeup_days == {"2026-10-10": 4}
 
-    # 老用户重新导入时本地记录优先，不被导出内容覆盖
+    # 老用户重新导入同一份文件：直接以文件内容替换旧表
     tt.makeup_days = {"2026-10-11": 5}
     asyncio.run(plugin._save())
     asyncio.run(_collect(plugin._h_import(event, json.dumps(payload, ensure_ascii=False))))
-    assert plugin.store.get(plugin._user_key(event)).makeup_days == {"2026-10-11": 5}
+    assert plugin.store.get(plugin._user_key(event)).makeup_days == {"2026-10-10": 4}
 
 
 def test_backup_and_restore_roundtrip(plugin):
