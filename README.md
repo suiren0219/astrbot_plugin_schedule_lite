@@ -6,6 +6,8 @@
 仓库：<https://github.com/suiren0219/astrbot_plugin_schedule_lite> ·
 反馈：<https://github.com/suiren0219/astrbot_plugin_schedule_lite/issues>
 
+后续只解决一些bug，不再更新
+
 BLBot 式课表功能的 AstrBot 独立实现，适合部署在 **QQ 群**里：群成员各自把课表 App
 导出的 `.ics`、分享口令或链接发给机器人完成绑定，之后任何人都能在群里同步查看
 「谁在上课、谁请假、谁今天没课」。重点在**导入**：把不同课表软件导出的数据统一成
