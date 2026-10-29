@@ -143,10 +143,13 @@ ONBOARDING_TEXT = """👋 你还没有绑定课表，先完成第一步：
 3. 也可以发送 /课表 导入 <链接或口令>
 4. 导入完成后，发送 /课表 查看今天的课表
 
-常用入口：
+绑定后才能查看群友状态、排行和别人的课表；现在可以先看教程：
+/课表 帮助 导入    图文导入教程
+/课表 帮助         全部分类
+
+导入完成后：
 /课表 在上    看群友现在上什么课
-/课表 排行    本周课程时长榜
-/课表 帮助    按分类查看完整用法"""
+/课表 排行    本周课程时长榜（会显示自己的名次）"""
 
 HELP_INDEX_TEXT = f"""📚 课表 Lite 帮助（先看分类）
 
@@ -231,7 +234,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.11",
+    "v1.5.12",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1133,6 +1136,10 @@ class ScheduleLitePlugin(Star):
 
         group_id = event.get_group_id() or ""
         if target_id:
+            # 没有绑定课表的人不能查看别人的课表，先引导完成绑定
+            if not self._own_tt(event):
+                yield event.plain_result(ONBOARDING_TEXT)
+                return
             if not self._cfg("allow_group_query", True):
                 yield event.plain_result("本插件已关闭查询他人课表。")
                 return
@@ -1173,6 +1180,7 @@ class ScheduleLitePlugin(Star):
             show_location=self._show_location(),
             today=self._now().date(),
             holiday=self._calendar_for(target_date),
+            now_min=self._query_half(target_date),
         )
         if tt.term_guessed and not label:
             text += (
@@ -1197,16 +1205,24 @@ class ScheduleLitePlugin(Star):
                     return qq
         return ""
 
+    def _query_half(self, target_date: date) -> int | None:
+        """查询“今天”时按半天收窄；查其他日期返回 None，显示全天。"""
+        now = self._now()
+        if target_date != now.date():
+            return None
+        return now.hour * 60 + now.minute
+
     # ---------------------------------------------------------- 群友在上什么课
 
     async def _h_everyone(self, event):
         tt = self._own_tt(event)
         group_id = event.get_group_id() or ""
         now = self._now()
+        if not tt:
+            # 未绑定用户不能查看别人的上课状态，先引导绑定
+            yield event.plain_result(ONBOARDING_TEXT)
+            return
         if not group_id:
-            if not tt:
-                yield event.plain_result(ONBOARDING_TEXT)
-                return
             entries = self._cached_entries(f"u:{tt.owner_id}", [tt], now)
             entries = await self._attach_avatars(entries, [tt])
             if self._image_enabled("everyone_image"):
@@ -1302,7 +1318,11 @@ class ScheduleLitePlugin(Star):
             yield event.plain_result("排行要在群里用哦。")
             return
         tt = self._own_tt(event)
-        if tt and self._touch(event, tt):
+        if not tt:
+            # 未绑定用户不能看别人的排行，先引导绑定
+            yield event.plain_result(ONBOARDING_TEXT)
+            return
+        if self._touch(event, tt):
             await self._save()
 
         mode = "week"
@@ -1330,6 +1350,7 @@ class ScheduleLitePlugin(Star):
                 full=full,
                 title=f"本群{mode_label}课程时长榜",
                 holiday=self._calendar_for(self._now().date()),
+                highlight_owner=tt.owner_id if tt else "",
             )
         )
 

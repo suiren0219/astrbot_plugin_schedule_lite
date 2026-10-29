@@ -37,6 +37,70 @@ STATUS_PRIORITY = {2: 0, 6: 0, 1: 1, 0: 1, 3: 2, 4: 4, 5: 5}
 
 RANK_MODE_LABEL = {"today": "今日", "week": "本周", "month": "本月", "term": "本学期"}
 
+# 上午/下午分界：中午 12:00 之前开课算上午，之后算下午
+NOON_MINUTES = 12 * 60
+
+
+def half_of(now_min: int) -> str:
+    """返回 "morning" (上午) 或 "afternoon" (下午)。"""
+    return "morning" if now_min < NOON_MINUTES else "afternoon"
+
+
+def half_label(half: str) -> str:
+    return {"morning": "上午", "afternoon": "下午"}.get(half, "")
+
+
+def course_half(start: str, end: str) -> str:
+    """课程属于上午还是下午：按结课时间判断，正好 12:00 结课算上午。"""
+    end_min = minutes_of(end)
+    if end_min is None:
+        end_min = minutes_of(start) or 0
+    return "morning" if end_min <= NOON_MINUTES else "afternoon"
+
+
+def course_in_half(start: str, end: str, half: str) -> bool:
+    """课程是否落在指定半天里；跨中午的课两边都算，避免整节消失。"""
+    start_min = minutes_of(start)
+    end_min = minutes_of(end)
+    if start_min is None:
+        start_min = 0
+    if end_min is None:
+        end_min = start_min
+    if half == "morning":
+        return start_min < NOON_MINUTES
+    if half == "afternoon":
+        return end_min > NOON_MINUTES
+    return True
+
+
+def day_end_half(items: Sequence["DayItem"]) -> str:
+    """当天最后一节课结课在上午还是下午，决定查询只看哪一段。"""
+    last_end = max((minutes_of(item.end) or 0) for item in items)
+    return "morning" if last_end <= NOON_MINUTES else "afternoon"
+
+
+def scope_day_half(
+    items: Sequence["DayItem"], now_min: int
+) -> tuple[list["DayItem"], str, str, str]:
+    """按当前半天收窄当天课程，返回 (课程, 半天, 提示, 被隐藏的另一半名称)。
+
+    规则：上午查询只看上午的课，下午查询只看下午的课；
+    如果当天课程在上午就全部结束，下午再查直接提示已经上完。
+    """
+    if not items:
+        return [], "", "", ""
+    now_half = half_of(now_min)
+    other = "下午" if now_half == "morning" else "上午"
+    if now_half == "afternoon" and day_end_half(items) == "morning":
+        return [], now_half, "今天上午的课已经上完，下午没有课", other
+    scoped = [
+        item for item in items if course_in_half(item.start, item.end, now_half)
+    ]
+    if not scoped:
+        # 当前时段没有课时保留全天，免得用户以为课表丢了
+        return list(items), now_half, "", ""
+    return scoped, now_half, "", other
+
 
 def resolve_time(course: Course, sections: dict[int, Section]) -> tuple[str, str]:
     """优先按节次 + 当前作息计算时间，没有节次时用导入时的时间。"""
@@ -198,7 +262,13 @@ def format_day(
     show_location: bool = False,
     today: date | None = None,
     holiday=None,
+    now_min: int | None = None,
 ) -> str:
+    """渲染某天课表。
+
+    传入 now_min（仅查询“今天”时）会按半天收窄：当天课程在上午结束就只看上午，
+    上午课结束后再查直接提示已上完；下午结束则只看下午。
+    """
     today = today or d
     week, state = week_state(tt, d)
     prefix = "📚 "
@@ -231,7 +301,22 @@ def format_day(
     header = f"{prefix}{owner}{day_label} · 第 {week} 周（共 {tt.total_weeks} 周）{extra}"
 
     leave = tt.leave_on(d)
-    items = day_entries(tt, d, holiday)
+    day_items = day_entries(tt, d, holiday)
+    items = day_items
+    half_note = ""
+    finished_note = ""
+    other_half = ""
+    if now_min is not None and day_items:
+        items, half, finished_note, other_half = scope_day_half(day_items, now_min)
+        if finished_note:
+            lines = [header]
+            if leave:
+                reason = str(leave.get("reason") or "")
+                lines.append(f"📝 已请假{f'：{reason}' if reason else ''}")
+            lines.append(finished_note)
+            return "\n".join(lines)
+        if items and len(items) < len(day_items):
+            half_note = f" · {half_label(half)}"
 
     def moved_out_notes() -> list[str]:
         notes = []
@@ -253,6 +338,8 @@ def format_day(
         day_word = "今天" if d == today else "这天"
         return "\n".join([header, f"{day_word}没有课～"] + moved_out_notes())
 
+    if half_note:
+        header += half_note
     lines = [header]
     if leave:
         reason = str(leave.get("reason") or "")
@@ -271,6 +358,9 @@ def format_day(
         if marks:
             line += f"（{'·'.join(marks)}）"
         lines.append(line)
+
+    if half_note and len(items) < len(day_items):
+        lines.append(f"（已隐藏{other_half}的 {len(day_items) - len(items)} 节课）")
 
     lines.extend(moved_out_notes())
     return "\n".join(lines)
@@ -377,11 +467,14 @@ def status_now(
         return result
 
     total = sum((minutes_of(e) or 0) - (minutes_of(s) or 0) for _, s, e in tuples)
+    # 用最后一节课的结课时间判断是上午还是下午结束，避免上午结课后误报“今日”
+    last_end = max((minutes_of(e) or 0) for _, _s, e in tuples)
+    finished_half = "morning" if last_end <= NOON_MINUTES else "afternoon"
     result.update(
         type=4,
         order=(4, -total),
-        main="今日课程已上完",
-        sub=f"共计 {total / 60:.1f} 小时",
+        main=f"{half_label(finished_half)}课程已上完",
+        sub=f"今日共计 {total / 60:.1f} 小时",
     )
     return result
 
@@ -506,6 +599,7 @@ def format_rank(
     full: bool = False,
     title: str = "",
     holiday=None,
+    highlight_owner: str = "",
 ) -> str:
     mode = mode if mode in RANK_MODE_LABEL else "week"
     entries = []
@@ -517,11 +611,10 @@ def format_rank(
         return f"{RANK_MODE_LABEL[mode]}大家都没有课哦…"
 
     entries.sort(key=lambda item: item[0], reverse=True)
-    if not full:
-        entries = entries[:9]
-
     digits = {"today": 2, "week": 1, "month": 1, "term": 0}[mode]
-    lines = [title or f"{RANK_MODE_LABEL[mode]}课程时长榜"]
+
+    # 先按完整榜单算出每人的并列名次，再裁剪显示，这样“我的名次”才准确
+    ranked = []
     prev_hours = None
     prev_rank = 0
     for index, (hours, tt) in enumerate(entries):
@@ -529,8 +622,26 @@ def format_rank(
         if shown != prev_hours:
             prev_rank = index + 1
             prev_hours = shown
+        ranked.append((prev_rank, shown, hours, tt))
+
+    visible = ranked if full else ranked[:9]
+    lines = [title or f"{RANK_MODE_LABEL[mode]}课程时长榜"]
+    for rank, shown, _hours, tt in visible:
         name = tt.owner_name or tt.owner_id
-        lines.append(f"#{prev_rank} {shown}小时 {name}")
+        lines.append(f"#{rank} {shown}小时 {name}")
+    if not full and len(ranked) > len(visible):
+        lines.append(f"…另有 {len(ranked) - len(visible)} 人未显示")
+
+    mine = next(
+        (row for row in ranked if highlight_owner and row[3].owner_id == highlight_owner),
+        None,
+    )
+    if mine:
+        rank, shown, _hours, _tt = mine
+        if any(row[3].owner_id == highlight_owner for row in visible):
+            lines.append(f"\n👤 你当前排第 {rank} 名（{shown} 小时）")
+        else:
+            lines.append(f"\n👤 你当前排第 {rank} 名（{shown} 小时，未进前九）")
     return "\n".join(lines)
 
 
