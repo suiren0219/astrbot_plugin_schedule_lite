@@ -24,13 +24,20 @@ from ..model import Course, Section
 from ..normalize import parse_date, parse_time
 from .base import ImportFailure, ImportResult, build_result
 
-# 官方域名走 HTTPS，兼容部分网络封禁 IP 直连 3000 端口的情况；
-# 原来的 IP 直连保留为兜底，两者由 Nexio App 共用同一套后端。
-SHARE_URLS = (
-    "https://nexioschedule.icu/api/share",
-    "http://182.92.193.223:3000/api/share",
-)
-SHARE_URL = SHARE_URLS[0]
+# Nexio 官方口令服务（HTTPS）。这里只写公开域名，不内置任何 IP 硬编码：
+# 自建/镜像部署请由使用者在插件配置里填自己的地址，见 share_url 参数。
+SHARE_URL = "https://nexioschedule.icu/api/share"
+
+
+def share_urls(custom: str = "") -> tuple[str, ...]:
+    """返回要尝试的口令服务地址：用户配置优先，否则用官方域名。"""
+    configured = (custom or "").strip()
+    if configured:
+        url = configured
+        if "{code}" not in url:
+            url = url.rstrip("/") + "/api/share"
+        return (url,)
+    return (SHARE_URL,)
 
 # 趣味口令：中文短语为主，也兼容字母数字；排除明显不是口令的内容。
 _CODE_RE = re.compile(r"^[\u4e00-\u9fa5A-Za-z0-9_-]{2,64}$")
@@ -250,6 +257,7 @@ async def import_code(
     *,
     fetch,
     api_fetch=None,
+    share_url: str = "",
     fallback_sections: list[Section] | None = None,
     default_total_weeks: int = 20,
     store_teacher: bool = False,
@@ -261,8 +269,10 @@ async def import_code(
         raise ImportFailure("Nexio 分享口令是空的")
     encoded = quote(clean, safe="")
     last_error = ""
-    for base in SHARE_URLS:
-        url = f"{base}?code={encoded}"
+    for base in share_urls(share_url):
+        url = base.replace("{code}", encoded)
+        if "{code}" not in base:
+            url = f"{base}?code={encoded}"
         try:
             if api_fetch is not None:
                 status, text = await api_fetch(url)

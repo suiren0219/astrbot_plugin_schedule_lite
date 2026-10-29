@@ -498,7 +498,7 @@ def test_nexio_expired_code_message():
         raise AssertionError("过期口令应当报错")
 
 
-def test_nexio_share_code_uses_https_endpoint_first():
+def test_nexio_share_code_uses_https_endpoint():
     payload = {
         "ok": True,
         "code": "示例课表已上线",
@@ -522,10 +522,11 @@ def test_nexio_share_code_uses_https_endpoint_first():
         )
     )
     assert result.source_kind == "nexio"
-    assert seen and seen[0].startswith("https://nexioschedule.icu/api/share?code=")
+    assert seen == ["https://nexioschedule.icu/api/share?code=%E7%A4%BA%E4%BE%8B%E8%AF%BE%E8%A1%A8%E5%B7%B2%E4%B8%8A%E7%BA%BF"]
 
 
-def test_nexio_share_code_falls_back_to_ip_endpoint():
+def test_nexio_custom_share_url():
+    """自建部署：配置自己的地址后只用这个地址，不再访问内置域名。"""
     payload = {
         "ok": True,
         "code": "示例课表已上线",
@@ -536,8 +537,6 @@ def test_nexio_share_code_falls_back_to_ip_endpoint():
 
     async def fake_api_fetch(url):
         seen.append(url)
-        if url.startswith("https://nexioschedule.icu"):
-            raise RuntimeError("connection reset")
         return 200, json.dumps(payload, ensure_ascii=False)
 
     result = asyncio.run(
@@ -545,11 +544,39 @@ def test_nexio_share_code_falls_back_to_ip_endpoint():
             "示例课表已上线",
             fetch=lambda url: None,
             api_fetch=fake_api_fetch,
+            nexio_share_url="https://share.example.com",
         )
     )
     assert result.name == "默认课表"
-    assert len(seen) == 2
-    assert seen[1].startswith("http://182.92.193.223:3000/api/share?code=")
+    assert seen == [
+        "https://share.example.com/api/share?code=%E7%A4%BA%E4%BE%8B%E8%AF%BE%E8%A1%A8%E5%B7%B2%E4%B8%8A%E7%BA%BF"
+    ]
+
+
+def test_nexio_custom_share_url_template():
+    payload = {
+        "ok": True,
+        "code": "示例课表已上线",
+        "schedule_name": "默认课表",
+        "schedule_data": _nexio_payload(),
+    }
+    seen = []
+
+    async def fake_api_fetch(url):
+        seen.append(url)
+        return 200, json.dumps(payload, ensure_ascii=False)
+
+    asyncio.run(
+        detect.import_any(
+            "示例课表已上线",
+            fetch=lambda url: None,
+            api_fetch=fake_api_fetch,
+            nexio_share_url="https://mirror.local/share/{code}?format=json",
+        )
+    )
+    assert seen == [
+        "https://mirror.local/share/%E7%A4%BA%E4%BE%8B%E8%AF%BE%E8%A1%A8%E5%B7%B2%E4%B8%8A%E7%BA%BF?format=json"
+    ]
 
 
 def test_nexio_404_gives_clear_message():
