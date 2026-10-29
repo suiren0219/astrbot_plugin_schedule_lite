@@ -255,6 +255,45 @@ def test_import_and_query(plugin):
     assert "大学物理" in query[0]
 
 
+def test_unbound_user_cannot_view_others(plugin):
+    other = _Event(uid="10002", nick="李四", group="g1")
+    asyncio.run(_collect(plugin._h_import(other, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    stranger = _Event(uid="99999", nick="路人", group="g1")
+    everyone = asyncio.run(_collect(plugin._h_everyone(stranger)))
+    assert "绑定课表" in everyone[0]
+    assert "李四" not in everyone[0]
+
+    query = asyncio.run(_collect(plugin._h_query(stranger, "10002")))
+    assert "绑定课表" in query[0]
+    assert "大学物理" not in query[0]
+
+    # 未绑定用户查自己的课表同样只看到引导
+    own = asyncio.run(_collect(plugin._h_query(stranger, "")))
+    assert "绑定课表" in own[0]
+
+
+def test_query_today_uses_current_minutes(plugin):
+    event = _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    plugin.store.get(plugin._user_key(event))
+
+    minutes = plugin._query_half(plugin._now().date())
+    now = plugin._now()
+    assert minutes == now.hour * 60 + now.minute
+    # 查其他日期仍返回 None，显示全天
+    assert plugin._query_half(plugin._now().date().replace(year=2020)) is None
+
+
+def test_rank_shows_my_rank_for_unbound_seeker(plugin):
+    event = _import_sample(plugin, _Event("/课表 导入", uid="10001", nick="张三", group="g1"))
+    second = _Event("/课表 导入", uid="10002", nick="李四", group="g1")
+    asyncio.run(_collect(plugin._h_import(second, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    out = asyncio.run(_collect(plugin._h_rank(event, "学期")))
+    assert "你当前排第" in out[0]
+    assert "张三" in out[0]
+
+
 def test_group_everyone_and_rank(plugin):
     event = _Event("/课表 导入", group="g1")
     asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
@@ -366,6 +405,12 @@ def test_cross_group_privacy(plugin):
     asyncio.run(_collect(plugin._h_import(other, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
 
     group_event = _Event(group="g1")
+    # 未绑定用户不能查别人，先收到绑定引导
+    blocked = asyncio.run(_collect(plugin._h_query(group_event, "10002")))
+    assert "绑定课表" in blocked[0]
+
+    # 绑定后再查，仍受跨群隐私保护
+    _import_sample(plugin, _Event("/课表 导入", uid="10001", nick="张三", group="g1"))
     result = asyncio.run(_collect(plugin._h_query(group_event, "10002")))
     assert "隐私" in result[0]
 

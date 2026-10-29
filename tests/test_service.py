@@ -220,6 +220,138 @@ def test_leave_and_adjustment():
     assert "（调课）" in text
 
 
+def test_format_day_half_filter():
+    from datetime import date
+
+    from schedule_lite_core.model import Course
+
+    tt = make_timetable()
+    tt.courses = [
+        Course(name="高等数学", day=1, weeks=[1], start="08:00", end="09:40"),
+        Course(name="大学物理", day=1, weeks=[1], start="14:00", end="15:40"),
+    ]
+    tt.invalidate_index()
+
+    # 上午查询：只看上午，下午的课隐藏
+    morning = format_day(tt, date(2026, 9, 7), now_min=9 * 60)
+    assert "高等数学" in morning
+    assert "大学物理" not in morning
+    assert "已隐藏下午的 1 节课" in morning
+
+    # 下午查询：只看下午，上午的课隐藏
+    afternoon = format_day(tt, date(2026, 9, 7), now_min=15 * 60)
+    assert "大学物理" in afternoon
+    assert "高等数学" not in afternoon
+    assert "已隐藏上午的 1 节课" in afternoon
+
+
+def test_format_day_after_morning_only_day():
+    from datetime import date
+
+    from schedule_lite_core.model import Course
+
+    tt = make_timetable()
+    tt.courses = [
+        Course(name="高等数学", day=1, weeks=[1], start="08:00", end="09:40"),
+    ]
+    tt.invalidate_index()
+
+    # 上午结课、下午没有课：下午再查直接提示已上完
+    text = format_day(tt, date(2026, 9, 7), now_min=15 * 60)
+    assert "上午的课已经上完" in text
+    assert "高等数学" not in text
+
+    # 上午还在上课时正常显示
+    during = format_day(tt, date(2026, 9, 7), now_min=8 * 60 + 30)
+    assert "高等数学" in during
+
+
+def test_format_day_defaults_to_full_day():
+    from datetime import date
+
+    from schedule_lite_core.model import Course
+
+    tt = make_timetable()
+    tt.courses = [
+        Course(name="高等数学", day=1, weeks=[1], start="08:00", end="09:40"),
+        Course(name="大学物理", day=1, weeks=[1], start="14:00", end="15:40"),
+    ]
+    tt.invalidate_index()
+    text = format_day(tt, date(2026, 9, 7))
+    assert "高等数学" in text and "大学物理" in text
+    assert "已隐藏" not in text
+
+
+def test_course_in_half_boundaries():
+    from schedule_lite_core.service import course_in_half
+
+    # 正好 12:00 结课算上午
+    assert course_in_half("10:00", "12:00", "morning") is True
+    assert course_in_half("10:00", "12:00", "afternoon") is False
+    # 跨中午的课上午和下午都能看到，不会整节消失
+    assert course_in_half("11:00", "12:30", "morning") is True
+    assert course_in_half("11:00", "12:30", "afternoon") is True
+    assert course_in_half("14:00", "15:40", "morning") is False
+
+
+def test_status_after_morning_uses_morning_wording():
+    tt = make_timetable()
+    tt.courses = [
+        c for c in tt.courses if c.name == "高等数学"
+    ]
+    status = status_now(tt, datetime(2026, 9, 7, 15, 0, tzinfo=TZ))
+    assert status["type"] == 4
+    assert "上午课程已上完" in status["main"]
+
+
+def test_rank_shows_my_position():
+    tt = make_timetable()
+    others = []
+    for index, (name, start, end) in enumerate(
+        [("班长", "08:00", "12:00"), ("学委", "13:00", "18:00")], start=2
+    ):
+        other = make_timetable()
+        other.owner_id = f"u{index}"
+        other.owner_name = name
+        from schedule_lite_core.model import Course
+
+        other.courses = [
+            Course(name="课", day=1, weeks=[1], start=start, end=end)
+        ]
+        others.append(other)
+    text = format_rank(
+        [tt, *others],
+        "week",
+        datetime(2026, 9, 8, 12, tzinfo=TZ),
+        title="测试榜",
+        highlight_owner="u1",
+    )
+    assert "你当前排第" in text
+    assert "未进前九" not in text
+
+    # 自己不在前九时给出具体名次
+    many = [tt]
+    for index in range(12):
+        other = make_timetable()
+        other.owner_id = f"x{index}"
+        other.owner_name = f"同学{index}"
+        from schedule_lite_core.model import Course
+
+        other.courses = [
+            Course(name="课", day=1, weeks=[1], start="08:00", end="18:00")
+        ]
+        many.append(other)
+    long_text = format_rank(
+        many,
+        "week",
+        datetime(2026, 9, 8, 12, tzinfo=TZ),
+        title="测试榜",
+        highlight_owner="u1",
+    )
+    assert "另有 4 人未显示" in long_text
+    assert "你当前排第 13 名" in long_text
+
+
 def test_everyone_priority_and_hide_idle():
     from datetime import date
 
