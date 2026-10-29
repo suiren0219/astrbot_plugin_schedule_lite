@@ -104,8 +104,9 @@ BLBot 式课表功能的 AstrBot 独立实现，适合部署在 **QQ 群**里：
 Nexio 有三种导入方式，任选一种：
 
 - **分享口令**（推荐）：App 里分享课表 → 生成口令，`/课表 导入 示例课表已上线`；
-  口令 30 分钟内有效，过期需要重新生成。插件优先访问 `nexioschedule.icu`，
-  失败时自动回退到 App 的固定 IP 接口
+  口令 30 分钟内有效，过期需要重新生成。插件默认访问 Nexio 官方 HTTPS 域名
+  `nexioschedule.icu`；如果口令服务由你自己部署，把地址填到配置项
+  `nexio_share_url`，插件就只访问你填的那个地址
 - **ICS**：分享 → 导出 `.ics`，把文件发给机器人
 - **JSON**：分享 → 导出课表 JSON，发文件或粘贴内容
 
@@ -252,6 +253,7 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 | `allow_cross_group` | false | 允许跨群查询 |
 | `allow_network` | true | 允许联网导入 |
 | `allow_private_network` | false | 允许访问内网地址（默认防 SSRF） |
+| `nexio_share_url` | 空 | 自建 Nexio 口令服务地址；留空用官方 HTTPS 域名 |
 | `max_file_kb` | 2048 | 导入文件大小上限 |
 | `notify_enabled` | true | 提醒总开关 |
 | `notify_check_seconds` | 60 | 提醒检查间隔 |
@@ -283,7 +285,8 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 
 ## 已知限制
 
-- Nexio 分享口令依赖 App 自建的中转服务（`nexioschedule.icu`，失败回退固定 IP + 3000 端口），服务变动时会失效；长期使用建议导出 ICS/JSON
+- Nexio 分享口令依赖 App 的中转服务（默认 `https://nexioschedule.icu`），服务变动时会失效；
+  自建部署请配置 `nexio_share_url`，长期使用建议导出 ICS/JSON
 - WakeUp 的导入依赖官方接口，接口变动时可能需要更新适配
 - WakeUp 的接口固定带 `version: 280` 请求头，上游改版后可能失效
 - 拾光只支持单表导入 JSON，不支持整库备份

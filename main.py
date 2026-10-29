@@ -234,7 +234,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.12",
+    "v1.5.13",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1402,6 +1402,7 @@ class ScheduleLitePlugin(Star):
             raw,
             fetch=self._fetch,
             api_fetch=self._fetch_api,
+            nexio_share_url=str(self._cfg("nexio_share_url", "") or ""),
             session=self._http,
             fallback_sections=self._fallback_sections(),
             default_total_weeks=self._default_total_weeks(),
@@ -1641,8 +1642,21 @@ class ScheduleLitePlugin(Star):
                 return text
         return ""
 
+    def _trusted_hosts(self) -> set[str]:
+        """管理员显式配置的服务地址：只放行这些主机的内网访问。"""
+        configured = str(self._cfg("nexio_share_url", "") or "").strip()
+        if not configured:
+            return set()
+        parsed = urlparse(configured)
+        host = parsed.hostname or ""
+        return {host} if host else set()
+
     async def _check_url(self, url: str) -> None:
-        """阻止把机器人当成代理访问内网/元数据地址（SSRF）。"""
+        """阻止把机器人当成代理访问内网/元数据地址（SSRF）。
+
+        只对用户提交的链接生效；管理员在配置里显式写下的服务地址
+        （如自建 Nexio 口令服务）单独放行，不需要打开全局内网开关。
+        """
         parsed = urlparse(url)
         if parsed.scheme not in ("http", "https"):
             raise ImportFailure("只支持 http/https 链接")
@@ -1650,6 +1664,8 @@ class ScheduleLitePlugin(Star):
         if not host:
             raise ImportFailure("链接里没有主机名")
         if self._cfg("allow_private_network", False):
+            return
+        if host.lower() in {item.lower() for item in self._trusted_hosts()}:
             return
         try:
             addresses = [ipaddress.ip_address(host)]
