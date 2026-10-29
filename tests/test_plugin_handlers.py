@@ -469,6 +469,45 @@ def test_ssrf_guard(plugin):
         asyncio.run(plugin._check_url("file:///etc/passwd"))
 
 
+def test_ssrf_guard_allows_configured_share_service(plugin):
+    """自建口令服务填在配置里时只放行该主机，其他内网地址仍然拒绝。"""
+    from schedule_lite_core.importers.base import ImportFailure
+
+    plugin.config["nexio_share_url"] = "http://nexio.internal:3000/api/share"
+    asyncio.run(plugin._check_url("http://nexio.internal:3000/api/share?code=x"))
+
+    with pytest.raises(ImportFailure):
+        asyncio.run(plugin._check_url("http://other.internal:3000/api/share?code=x"))
+    with pytest.raises(ImportFailure):
+        asyncio.run(plugin._check_url("http://127.0.0.1:3000/api/share?code=x"))
+
+
+def test_nexio_custom_endpoint_reaches_import(plugin):
+    """配置自建地址后，口令导入应请求该地址而不是内置域名。"""
+    import astrbot.api.web as web
+
+    payload = {
+        "ok": True,
+        "code": "示例课表已上线",
+        "schedule_name": "默认课表",
+        "schedule_data": json.loads(json.dumps(SHIGUANG_SAMPLE)),
+    }
+    seen = []
+
+    async def fake_fetch_api(url):
+        seen.append(url)
+        return 200, json.dumps(payload, ensure_ascii=False)
+
+    plugin.config["nexio_share_url"] = "https://share.example.com"
+    plugin._http = object()  # 仅用于通过 allow_network 判断
+    plugin._fetch_api = fake_fetch_api
+
+    web.request.body = {"text": "示例课表已上线", "owner_id": "70001"}
+    result = asyncio.run(plugin._api_import())
+    assert result.get("status") == "ok"
+    assert seen and seen[0].startswith("https://share.example.com/api/share?code=")
+
+
 def test_term_fix(plugin):
     event = _Event()
     asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))

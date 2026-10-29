@@ -58,6 +58,12 @@
     "default": false,
     "hint": "默认禁止从用户给的链接访问局域网/127.0.0.1/云元数据地址，防止 SSRF。只在你确实要从内网服务器导入时打开。"
   },
+  "nexio_share_url": {
+    "description": "🔗 Nexio 口令服务地址",
+    "type": "string",
+    "default": "",
+    "hint": "留空使用官方 HTTPS 域名。自建或镜像部署时填自己的地址，例如 https://your-domain/api/share，也可写含 {code} 占位的完整模板。指向内网时会自动放行该地址，不影响其他链接的 SSRF 防护。"
+  },
   "max_file_kb": {
     "description": "📦 导入文件大小上限（KB）",
     "type": "int",
