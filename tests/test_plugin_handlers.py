@@ -469,6 +469,78 @@ def test_ssrf_guard(plugin):
         asyncio.run(plugin._check_url("file:///etc/passwd"))
 
 
+def test_session_scope_modes(plugin):
+    plugin.config["session_scope_mode"] = "all"
+    assert plugin._session_allowed(_Event(group="g1")) is True
+
+    plugin.config["session_scope_mode"] = "whitelist"
+    plugin.config["session_scope_list"] = "g1\n 10002 "
+    assert plugin._session_allowed(_Event(group="g1")) is True
+    assert plugin._session_allowed(_Event(group="g2")) is False
+
+    plugin.config["session_scope_mode"] = "blacklist"
+    assert plugin._session_allowed(_Event(group="g1")) is False
+    assert plugin._session_allowed(_Event(group="g2")) is True
+
+    # 名单为空时不做限制，避免配置到一半把所有人挡住
+    plugin.config["session_scope_list"] = ""
+    assert plugin._session_allowed(_Event(group="g2")) is True
+
+
+def test_session_scope_blocks_commands(plugin):
+    event = _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    plugin.config["session_scope_mode"] = "whitelist"
+    plugin.config["session_scope_list"] = "99999"
+
+    blocked = asyncio.run(_collect(plugin._dispatch(_Event("/课表", group="g1"))))
+    assert blocked and "没有启用" in blocked[0]
+
+    blocked_glued = asyncio.run(_collect(plugin.cmd_glued(_Event("课表明天", group="g1"))))
+    assert blocked_glued and "没有启用" in blocked_glued[0]
+
+    plugin.config["session_scope_list"] = "g1"
+    allowed = asyncio.run(_collect(plugin._dispatch(_Event("/课表", group="g1"))))
+    assert allowed and "没有启用" not in allowed[0]
+
+
+def test_session_scope_filters_scheduled_broadcasts(tmp_path):
+    import main as plugin_main
+    from schedule_lite_core.model import Course, Timetable
+
+    class _Ctx:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, origin, chain):
+            self.sent.append(origin)
+
+    ctx = _Ctx()
+    plugin_main.StarTools._dir = tmp_path
+    plugin = plugin_main.ScheduleLitePlugin(ctx, {
+        "showcase_enabled": True,
+        "showcase_time": "00:00",
+        "showcase_min_minutes": 1,
+        "showcase_min_users": 1,
+        "session_scope_mode": "whitelist",
+        "session_scope_list": "g1",
+    })
+    today = plugin._now().date()
+    weekday = today.isoweekday()
+    for group in ("g1", "g2"):
+        tt = Timetable(
+            owner_id=f"u-{group}",
+            owner_name=f"同学{group}",
+            term_start=today.replace(day=1).isoformat(),
+            total_weeks=20,
+            courses=[Course(name="课", day=weekday, weeks=list(range(1, 21)), start="00:00", end="23:59")],
+        )
+        tt.remember_group(group, f"test:group:{group}")
+        plugin.store.put(f"test:{group}", tt)
+
+    asyncio.run(plugin._check_scheduled_broadcasts(plugin._now()))
+    assert ctx.sent == ["test:group:g1"]
+
+
 def test_ssrf_guard_allows_configured_share_service(plugin):
     """自建口令服务填在配置里时只放行该主机，其他内网地址仍然拒绝。"""
     from schedule_lite_core.importers.base import ImportFailure

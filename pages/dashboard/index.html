@@ -123,6 +123,7 @@
             </div>
           </div>
           <p class="muted" id="holiday-source">—</p>
+          <div id="holiday-runs" class="holiday-runs"></div>
           <div id="holiday-list" class="holiday-list"><div class="empty">加载中…</div></div>
         </div>
       </section>
@@ -139,6 +140,20 @@
             <label class="setting"><span><b>隐藏无课同学</b><small>超过人数时</small></span><input class="input short" type="number" id="set-hide-idle"></label>
             <label class="setting"><span><b>群友活跃天数</b><small>0 = 关闭过滤</small></span><input class="input short" type="number" id="set-active-days"></label>
             <label class="setting"><span><b>每页人数</b><small>大于 8 人自动分页</small></span><input class="input short" type="number" id="set-page-size"></label>
+          </div>
+        </div>
+        <div class="card">
+          <div class="section-head"><div><h2>会话生效范围</h2><p>控制哪些群/会话能用课表，定时节目同样生效</p></div></div>
+          <div class="setting-grid">
+            <label class="setting"><span><b>生效方式</b><small>白名单外不会响应</small></span>
+              <select class="input" id="set-scope-mode">
+                <option value="all">全部会话都可用</option>
+                <option value="whitelist">只用白名单里的会话</option>
+                <option value="blacklist">黑名单里的会话不可用</option>
+              </select>
+            </label>
+            <label class="setting wide"><span><b>会话列表</b><small>每行一个群号 / 会话 ID，留空表示不限制</small><textarea class="input textarea" id="set-scope-list" rows="5" placeholder="123456789&#10;987654321&#10;aiocqhttp:GroupMessage:123456789"></textarea></span></label>
+            <p class="muted">群聊里用群号即可；会话 ID 形如 <code>aiocqhttp:GroupMessage:123456789</code>。当前生效状态：<b id="scope-status">—</b></p>
           </div>
         </div>
         <div class="card">

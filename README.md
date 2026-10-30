@@ -185,8 +185,9 @@ data/plugin_data/astrbot_plugin_schedule_lite/help/
   按群分组展示，同一份课表加入多个群时会分别出现在对应群下
 - **数据**：搜索、新增、编辑、删除课表；课程行支持星期、周次、节次或具体时间
 - **记录**：直接编辑请假、调课、补班和群绑定；新增调课会由后端生成课程快照
-- **调休**：查看本地节假日缓存，按年份手动刷新
-- **设置**：隐私开关、分页人数、隐藏无课阈值、满课榜/累计榜、节假日接口、全局补班映射等
+- **调休**：全年月历排版，放假/补班直接标在日期上，顶部汇总各假期区间；按年份手动刷新
+- **设置**：隐私开关、分页人数、隐藏无课阈值、满课榜/累计榜、节假日接口、全局补班映射、
+  会话生效范围（全部 / 白名单 / 黑名单）等
 
 页面右上角的主题按钮可以在「跟随系统 → 浅色 → 深色」之间切换，选择会记在
 浏览器本地。跟随系统时，如果运行在 AstrBot 插件页内，会优先使用后台当前的
@@ -251,6 +252,8 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 | `show_location` | false | 是否在查询/状态/提醒里显示地点 |
 | `allow_group_query` | true | 允许查他人课表 |
 | `allow_cross_group` | false | 允许跨群查询 |
+| `session_scope_mode` | all | 会话生效范围：`all` / `whitelist` / `blacklist` |
+| `session_scope_list` | 空 | 生效范围名单，每行一个群号或会话 ID；留空不限制 |
 | `allow_network` | true | 允许联网导入 |
 | `allow_private_network` | false | 允许访问内网地址（默认防 SSRF） |
 | `nexio_share_url` | 空 | 自建 Nexio 口令服务地址；留空用官方 HTTPS 域名 |
