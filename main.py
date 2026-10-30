@@ -234,7 +234,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.13",
+    "v1.5.14",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -290,6 +290,57 @@ class ScheduleLitePlugin(Star):
         if self._cfg("notify_enabled", True):
             self._notify_task = asyncio.create_task(self._notify_loop())
         logger.info(f"[{PLUGIN_NAME}] 已加载，共 {len(self.store.all())} 份课表")
+
+    # ---------------------------------------------------------- 会话生效范围
+
+    def _session_mode(self) -> str:
+        mode = str(self._cfg("session_scope_mode", "all") or "all").strip().lower()
+        return mode if mode in ("all", "whitelist", "blacklist") else "all"
+
+    def _session_ids(self) -> set[str]:
+        """解析会话列表：每行一个群号/会话 ID，支持逗号、分号、空格分隔。"""
+        text = str(self._cfg("session_scope_list", "") or "")
+        ids: set[str] = set()
+        for chunk in re.split(r"[\s,，;；]+", text):
+            value = chunk.strip()
+            if value:
+                ids.add(value)
+        return ids
+
+    def _session_allowed(self, event_or_origin) -> bool:
+        """判断当前会话是否允许使用插件；定时推送也走这里。"""
+        mode = self._session_mode()
+        if mode == "all":
+            return True
+        ids = self._session_ids()
+        if not ids:
+            # 名单为空时不做限制，避免配置到一半把所有人挡在外面
+            return True
+        if isinstance(event_or_origin, str):
+            origin = event_or_origin
+            group_id = ""
+        else:
+            origin = str(getattr(event_or_origin, "unified_msg_origin", "") or "")
+            group_id = str(event_or_origin.get_group_id() or "")
+        if group_id and group_id in ids:
+            hit = True
+        else:
+            hit = any(
+                token and (token == origin or token in origin)
+                for token in ids
+            )
+        return hit if mode == "whitelist" else not hit
+
+    def _origin_allowed(self, origin: str) -> bool:
+        return self._session_allowed(origin)
+
+    @staticmethod
+    def _session_blocked_text() -> str:
+        return (
+            "这个会话没有启用课表 Lite。\n"
+            "需要的话请在插件控制台的「设置 → 会话生效范围」里把本群加进白名单，"
+            "或改成「全部会话」。"
+        )
 
     async def terminate(self):
         for task_name in ("_notify_task", "_holiday_task", "_activity_task"):
@@ -1016,6 +1067,8 @@ class ScheduleLitePlugin(Star):
             filename = str(getattr(file_comps[0], "name", "") or "").lower()
             if not filename.endswith((".ics", ".json", ".csv", ".wakeup_schedule")):
                 return
+        if not self._session_allowed(event):
+            return  # 会话未启用时静默忽略，避免在无关群里响应文件
         event.stop_event()
         async for item in self._h_import(event, ""):
             yield item
@@ -1033,6 +1086,13 @@ class ScheduleLitePlugin(Star):
         first = parts[0] if parts else ""
         tail = parts[1] if len(parts) > 1 else ""
         sub = SUBCOMMANDS.get(first.lower()) if first else None
+
+        # 会话生效范围：白名单外/黑名单内直接静默，不回应也不写入数据
+        if not self._session_allowed(event):
+            if sub == "help" or not sub:
+                yield event.plain_result(self._session_blocked_text())
+            event.stop_event()
+            return
 
         if sub == "help":
             async for item in self._h_help(event, tail.strip()):
@@ -2269,6 +2329,12 @@ class ScheduleLitePlugin(Star):
         today = now.date()
         now_min = now.hour * 60 + now.minute
         origins = self._group_origins()
+        # 会话生效范围同样作用于定时推送：白名单外的群不发节目
+        origins = {
+            group_id: origin
+            for group_id, origin in origins.items()
+            if self._origin_allowed(origin)
+        }
         if not origins:
             return
 
@@ -3377,6 +3443,8 @@ class ScheduleLitePlugin(Star):
         "everyone_page_size",
         "everyone_hide_idle_over",
         "everyone_active_days",
+        "session_scope_mode",
+        "session_scope_list",
         "showcase_enabled",
         "showcase_time",
         "showcase_min_minutes",
@@ -3441,6 +3509,12 @@ class ScheduleLitePlugin(Star):
                     value = _safe_int(value, _safe_int(self._cfg(key, 0), 0))
                 elif key == "recap_mode":
                     value = str(value) if str(value) in ("week", "month") else "week"
+                elif key == "session_scope_mode":
+                    value = (
+                        str(value)
+                        if str(value) in ("all", "whitelist", "blacklist")
+                        else "all"
+                    )
                 else:
                     value = str(value or "")
                 try:

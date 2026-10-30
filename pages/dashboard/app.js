@@ -930,6 +930,84 @@
 
   /* ---------------------------------------------------------------- holiday */
 
+  const HOLIDAY_MONTHS = ["一月", "二月", "三月", "四月", "五月", "六月", "七月", "八月", "九月", "十月", "十一月", "十二月"];
+  const HOLIDAY_WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
+
+  function isoDate(year, month, day) {
+    return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+  }
+
+  function groupHolidayRuns(days) {
+    // 连续同日类型的日期合并成区间，例如 02-15 ~ 02-23 春节
+    const sorted = [...days].sort((a, b) => a.date.localeCompare(b.date));
+    const runs = [];
+    for (const day of sorted) {
+      const last = runs[runs.length - 1];
+      const sameKind = last && last.off === day.off;
+      const prev = last ? new Date(`${last.end}T00:00:00`) : null;
+      const cur = new Date(`${day.date}T00:00:00`);
+      const adjacent = prev && (cur - prev) / 86400000 === 1;
+      if (sameKind && adjacent) {
+        last.end = day.date;
+        if (day.name && !last.names.includes(day.name)) last.names.push(day.name);
+      } else {
+        runs.push({
+          off: day.off,
+          start: day.date,
+          end: day.date,
+          names: day.name ? [day.name] : [],
+        });
+      }
+    }
+    return runs;
+  }
+
+  function holidayRunLabel(run) {
+    const name = run.names[0] || (run.off ? "放假" : "补班");
+    const short = (d) => d.slice(5).replace("-", "/");
+    const span = run.start === run.end ? short(run.start) : `${short(run.start)} – ${short(run.end)}`;
+    const length = (new Date(`${run.end}T00:00:00`) - new Date(`${run.start}T00:00:00`)) / 86400000 + 1;
+    return {
+      name,
+      span,
+      days: run.off ? `${length} 天` : "调休",
+      off: run.off,
+    };
+  }
+
+  function renderHolidayMonth(year, month, byDate, todayIso) {
+    const first = new Date(year, month, 1);
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+    const lead = (first.getDay() + 6) % 7;  // 周一为第 0 列
+    const cells = [];
+    for (let i = 0; i < lead; i += 1) cells.push('<div class="cal-cell blank"></div>');
+    for (let day = 1; day <= daysInMonth; day += 1) {
+      const key = isoDate(year, month, day);
+      const info = byDate.get(key);
+      const classes = ["cal-cell"];
+      if (info) classes.push(info.off ? "off" : "work");
+      if (key === todayIso) classes.push("today");
+      const week = (lead + day - 1) % 7;
+      if (week >= 5) classes.push("weekend");
+      const label = info
+        ? `<i>${info.off ? "休" : "班"}</i>`
+        : "";
+      cells.push(`
+        <div class="${classes.join(" ")}" title="${key}${info ? ` · ${esc(info.name || (info.off ? "放假" : "补班"))}` : ""}">
+          <b>${day}</b>${label}
+        </div>`);
+    }
+    while (cells.length % 7 !== 0) cells.push('<div class="cal-cell blank"></div>');
+    return `
+      <section class="cal-month">
+        <h3>${HOLIDAY_MONTHS[month]}</h3>
+        <div class="cal-grid">
+          ${HOLIDAY_WEEKDAYS.map((d) => `<div class="cal-head">${d}</div>`).join("")}
+          ${cells.join("")}
+        </div>
+      </section>`;
+  }
+
   async function loadHoliday() {
     $("#holiday-year").value = state.holidayYear;
     try {
@@ -938,13 +1016,46 @@
         ? `来源：${data.source} · 更新于 ${data.updated_at || "未知"}`
         : "还没有本地缓存，点击「刷新缓存」拉取";
       const days = data.days || [];
-      $("#holiday-list").innerHTML = days.length
-        ? days.map((day) => `
-          <div class="holiday-item ${day.off ? "" : "work"}">
-            <b>${esc(day.date)} · ${day.off ? "放假" : "补班"}</b>
-            <small>${esc(day.name || "")}</small>
-          </div>`).join("")
-        : '<div class="empty">没有缓存数据</div>';
+      if (!days.length) {
+        $("#holiday-runs").innerHTML = "";
+        $("#holiday-list").innerHTML = '<div class="empty">没有缓存数据</div>';
+        return;
+      }
+
+      const year = Number(data.year || state.holidayYear);
+      const byDate = new Map(days.map((d) => [d.date, d]));
+      const runs = groupHolidayRuns(days);
+      const offCount = days.filter((d) => d.off).length;
+      const workCount = days.length - offCount;
+
+      $("#holiday-runs").innerHTML = `
+        <div class="run-summary">
+          <span class="run-pill off">${offCount} 天放假</span>
+          <span class="run-pill work">${workCount} 天补班</span>
+        </div>
+        <div class="run-list">
+          ${runs.map((run) => {
+            const info = holidayRunLabel(run);
+            return `
+              <div class="run-chip ${info.off ? "off" : "work"}">
+                <b>${esc(info.name)}</b>
+                <span>${esc(info.span)}</span>
+                <i>${esc(info.days)}</i>
+              </div>`;
+          }).join("")}
+        </div>`;
+
+      const today = new Date();
+      const todayIso = isoDate(today.getFullYear(), today.getMonth(), today.getDate());
+      $("#holiday-list").innerHTML = `
+        <div class="cal-wrap">
+          ${HOLIDAY_MONTHS.map((_, month) => renderHolidayMonth(year, month, byDate, todayIso)).join("")}
+        </div>
+        <div class="cal-legend">
+          <span><i class="dot off"></i>放假</span>
+          <span><i class="dot work"></i>补班</span>
+          <span><i class="dot today"></i>今天</span>
+        </div>`;
     } catch (err) {
       toast(`节假日读取失败：${err.message}`);
     }
@@ -981,6 +1092,9 @@
       set("#set-hide-idle", "everyone_hide_idle_over");
       set("#set-active-days", "everyone_active_days");
       set("#set-page-size", "everyone_page_size");
+      set("#set-scope-mode", "session_scope_mode");
+      set("#set-scope-list", "session_scope_list");
+      updateScopeStatus();
       set("#set-showcase", "showcase_enabled");
       set("#set-showcase-time", "showcase_time");
       set("#set-showcase-min", "showcase_min_minutes");
@@ -1035,6 +1149,25 @@
     return items;
   }
 
+  function updateScopeStatus() {
+    const mode = $("#set-scope-mode").value;
+    const ids = ($("#set-scope-list").value || "")
+      .split(/[\s,，;；]+/)
+      .map((v) => v.trim())
+      .filter(Boolean);
+    const label = {
+      all: "全部会话",
+      whitelist: "仅白名单",
+      blacklist: "黑名单外",
+    }[mode] || "全部会话";
+    const detail = mode === "all"
+      ? "所有群和私聊都可以用"
+      : ids.length
+        ? `${ids.length} 个会话`
+        : "列表为空，暂不限制";
+    $("#scope-status").textContent = `${label} · ${detail}`;
+  }
+
   async function saveSettings() {
     const num = (id) => {
       const n = Number($(id).value);
@@ -1049,6 +1182,8 @@
       everyone_hide_idle_over: num("#set-hide-idle"),
       everyone_active_days: num("#set-active-days"),
       everyone_page_size: num("#set-page-size"),
+      session_scope_mode: $("#set-scope-mode").value,
+      session_scope_list: $("#set-scope-list").value,
       showcase_enabled: $("#set-showcase").checked,
       showcase_time: $("#set-showcase-time").value.trim(),
       showcase_min_minutes: num("#set-showcase-min"),
@@ -1229,6 +1364,10 @@
   });
   $("#refresh-holiday").addEventListener("click", refreshHoliday);
   $("#save-settings").addEventListener("click", saveSettings);
+  ["#set-scope-mode", "#set-scope-list"].forEach((sel) => {
+    $(sel).addEventListener("input", updateScopeStatus);
+    $(sel).addEventListener("change", updateScopeStatus);
+  });
 
   $("#theme-toggle").addEventListener("click", cycleTheme);
   $("#conn-text").addEventListener("click", async () => {

@@ -40,6 +40,28 @@
     "default": true,
     "hint": "关闭后只能查自己的课表；「在上」和「排行」仍只统计本群用过课表的人。"
   },
+  "session_scope_mode": {
+    "description": "🎯 会话生效范围",
+    "type": "string",
+    "default": "all",
+    "hint": "all = 所有会话都可用；whitelist = 只在下方的会话列表里生效；blacklist = 除列表外都生效。定时节目也按这个范围发送。",
+    "options": [
+      "all",
+      "whitelist",
+      "blacklist"
+    ],
+    "labels": [
+      "全部会话都可用",
+      "只用白名单里的会话",
+      "黑名单里的会话不可用"
+    ]
+  },
+  "session_scope_list": {
+    "description": "📋 会话列表",
+    "type": "text",
+    "default": "",
+    "hint": "生效范围选 whitelist / blacklist 时使用。每行一个群号或会话 ID，也支持逗号、分号、空格分隔。留空表示不限制。"
+  },
   "allow_cross_group": {
     "description": "🔀 允许跨群查询他人课表",
     "type": "bool",
