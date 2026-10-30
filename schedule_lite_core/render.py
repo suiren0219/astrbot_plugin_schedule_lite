@@ -614,6 +614,70 @@ def _avatar_color(name: str) -> str:
     return AVATAR_COLORS[value % len(AVATAR_COLORS)]
 
 
+def _draw_avatar(
+    image: Any,
+    draw: Any,
+    cx: float,
+    cy: float,
+    radius: float,
+    avatar_path: str,
+    name: str,
+) -> bool:
+    """画圆形头像；失败时画首字母底色圆。"""
+    if avatar_path:
+        try:
+            with Image.open(avatar_path) as source:
+                avatar = source.convert("RGB")
+                side = min(avatar.size)
+                left = (avatar.width - side) // 2
+                top = (avatar.height - side) // 2
+                avatar = avatar.crop((left, top, left + side, top + side))
+                diameter = int(radius * 2)
+                avatar = avatar.resize((diameter, diameter), Image.LANCZOS)
+                mask = Image.new("L", (diameter, diameter), 0)
+                ImageDraw.Draw(mask).ellipse(
+                    (0, 0, diameter - 1, diameter - 1), fill=255
+                )
+                image.paste(avatar, (int(cx - radius), int(cy - radius)), mask)
+            return True
+        except Exception:  # noqa: BLE001
+            pass
+    draw.ellipse(
+        (cx - radius, cy - radius, cx + radius, cy + radius),
+        fill=_avatar_color(name),
+    )
+    initial = (name or "?")[:1]
+    initial_font = _font(_font_pair("")[1], _s(radius * 0.9))
+    draw.text(
+        (cx - initial_font.getlength(initial) / 2, cy - _s(radius * 0.55)),
+        initial,
+        font=initial_font,
+        fill="#FFFFFF",
+    )
+    return False
+
+
+def _everyone_blocks(entries: Sequence[dict]) -> list[tuple[str, Any, float]]:
+    """把状态列表拆成排版块：重点状态整行，已下课/无课压成紧凑网格。
+
+    返回 (kind, payload, 高度权重)：row=1.0、chips=0.6、divider=0.4。
+    """
+    key_rows = [e for e in entries if int(e.get("type", 5)) in (0, 1, 2, 3, 6)]
+    ended_rows = [e for e in entries if int(e.get("type", 5)) == 4]
+    idle_rows = [e for e in entries if int(e.get("type", 5)) == 5]
+
+    blocks: list[tuple[str, Any, float]] = [("row", e, 1.0) for e in key_rows]
+    if ended_rows:
+        blocks.append(("divider", f"已下课 · {len(ended_rows)} 人", 0.4))
+        for start in range(0, len(ended_rows), 3):
+            blocks.append(("chips", ended_rows[start : start + 3], 0.6))
+    if idle_rows:
+        blocks.append(("divider", f"今日无课 · {len(idle_rows)} 人", 0.4))
+        for start in range(0, len(idle_rows), 3):
+            blocks.append(("chips", idle_rows[start : start + 3], 0.6))
+    return blocks
+
+
 def render_everyone(
     entries: Sequence[dict],
     out_dir: str | Path,
@@ -644,24 +708,37 @@ def render_everyone(
     day_dir.mkdir(parents=True, exist_ok=True)
     _prune_day_dirs(out, day_dir.name, keep=3)
 
-    page_size = max(1, min(int(page_size or 8), 20))
-    # 最后一页不足半页时，优先并页或重新均分，避免出现只放一两个人的尾页。
-    if len(entries) > page_size:
-        pages = math.ceil(len(entries) / page_size)
-        last = len(entries) - (pages - 1) * page_size
-        if pages > 1 and last * 2 < page_size:
-            merged = math.ceil(len(entries) / (pages - 1))
-            page_size = merged if merged <= 20 else math.ceil(len(entries) / pages)
-    chunks = [list(entries[i : i + page_size]) for i in range(0, len(entries), page_size)]
+    # 已下课/无课压成 3 列小卡，一张图能放下更多人；重点状态仍是整行
+    blocks = _everyone_blocks(entries)
+    capacity = max(int(page_size or 8), 12)
+    pages: list[list[tuple[str, Any, float]]] = []
+    current: list[tuple[str, Any, float]] = []
+    used = 0.0
+    for block in blocks:
+        cost = block[2]
+        if current and used + cost > capacity:
+            pages.append(current)
+            current, used = [], 0.0
+        current.append(block)
+        used += cost
+    if current:
+        pages.append(current)
+
     stamp = time.strftime("%Y%m%d%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
     paths: list[Path] = []
+    row_h, row_gap = 96, 10
+    divider_h = 40
+    chip_h, chip_gap = 56, 8
 
-    for page_no, chunk in enumerate(chunks, start=1):
-        row_h = 108
-        gap = 12
-        header_h = 150
-        footer_h = 64
-        height = header_h + len(chunk) * (row_h + gap) - gap + footer_h
+    for page_no, chunk in enumerate(pages, start=1):
+        height = 150 + 64
+        for kind, _payload, _cost in chunk:
+            if kind == "row":
+                height += row_h + row_gap
+            elif kind == "divider":
+                height += divider_h
+            else:
+                height += chip_h + chip_gap
         image, draw = _new_page(width, height)
 
         draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
@@ -670,79 +747,71 @@ def render_everyone(
         if subtitle:
             draw.text((_s(48), _s(108)), subtitle, font=_font(regular, _s(18)), fill="#64748B")
 
-        y = _s(header_h)
-        for entry in chunk:
-            status_type = int(entry.get("type", 5))
-            fg, bg = STATUS_STYLE.get(status_type, STATUS_STYLE[5])
-            draw.rounded_rectangle(
-                (_s(28), y, _s(width - 28), y + _s(row_h)),
-                radius=_s(16),
-                fill="#F8FAFC",
-                outline="#E2E8F0",
-                width=_s(1),
-            )
-            cx, cy = _s(76), y + _s(row_h // 2)
-            radius = _s(28)
-            avatar_drawn = False
-            avatar_path = str(entry.get("avatar") or "")
-            if avatar_path:
-                try:
-                    with Image.open(avatar_path) as source:
-                        avatar = source.convert("RGB")
-                        side = min(avatar.size)
-                        left = (avatar.width - side) // 2
-                        top = (avatar.height - side) // 2
-                        avatar = avatar.crop((left, top, left + side, top + side))
-                        diameter = radius * 2
-                        avatar = avatar.resize((diameter, diameter), Image.LANCZOS)
-                        mask = Image.new("L", (diameter, diameter), 0)
-                        ImageDraw.Draw(mask).ellipse(
-                            (0, 0, diameter - 1, diameter - 1), fill=255
-                        )
-                        image.paste(avatar, (cx - radius, cy - radius), mask)
-                    avatar_drawn = True
-                except Exception:  # noqa: BLE001
-                    avatar_drawn = False
-            if not avatar_drawn:
-                draw.ellipse(
-                    (cx - radius, cy - radius, cx + radius, cy + radius),
-                    fill=_avatar_color(entry.get("name", "")),
+        y = _s(150)
+        for kind, payload, _cost in chunk:
+            if kind == "row":
+                entry = payload
+                status_type = int(entry.get("type", 5))
+                fg, bg = STATUS_STYLE.get(status_type, STATUS_STYLE[5])
+                draw.rounded_rectangle(
+                    (_s(28), y, _s(width - 28), y + _s(row_h)),
+                    radius=_s(16),
+                    fill="#F8FAFC",
+                    outline="#E2E8F0",
+                    width=_s(1),
                 )
-                initial = (entry.get("name") or "?")[:1]
-                initial_font = _font(bold, _s(25))
-                draw.text(
-                    (cx - initial_font.getlength(initial) / 2, cy - _s(16)),
-                    initial,
-                    font=initial_font,
-                    fill="#FFFFFF",
+                cx, cy = _s(76), y + _s(row_h // 2)
+                _draw_avatar(image, draw, cx, cy, _s(28), str(entry.get("avatar") or ""), entry.get("name", ""))
+
+                name = _ellipsize(draw, entry.get("name", ""), _font(bold, _s(23)), _s(430))
+                draw.text((_s(122), y + _s(16)), name, font=_font(bold, _s(23)), fill="#0F172A")
+
+                label = entry.get("label", "")
+                chip_font = _font(bold, _s(17))
+                chip_w = chip_font.getlength(label) + _s(28)
+                chip_h_label = _s(32)
+                chip_x = _s(width - 44) - chip_w
+                draw.rounded_rectangle(
+                    (chip_x, y + _s(16), chip_x + chip_w, y + _s(16) + chip_h_label),
+                    radius=_s(16),
+                    fill=bg,
                 )
+                draw.text((chip_x + _s(14), y + _s(21)), label, font=chip_font, fill=fg)
 
-            name = _ellipsize(draw, entry.get("name", ""), _font(bold, _s(23)), _s(430))
-            draw.text((_s(122), y + _s(16)), name, font=_font(bold, _s(23)), fill="#0F172A")
+                main = _ellipsize(draw, entry.get("main", ""), _font(regular, _s(21)), _s(width - 122 - 44))
+                draw.text((_s(122), y + _s(50)), main, font=_font(regular, _s(21)), fill="#334155")
 
-            label = entry.get("label", "")
-            chip_font = _font(bold, _s(17))
-            chip_w = chip_font.getlength(label) + _s(28)
-            chip_h = _s(32)
-            chip_x = _s(width - 44) - chip_w
-            draw.rounded_rectangle(
-                (chip_x, y + _s(16), chip_x + chip_w, y + _s(16) + chip_h),
-                radius=_s(16),
-                fill=bg,
-            )
-            draw.text(
-                (chip_x + _s(14), y + _s(21)),
-                label,
-                font=chip_font,
-                fill=fg,
-            )
-
-            main = _ellipsize(draw, entry.get("main", ""), _font(regular, _s(21)), _s(width - 122 - 44))
-            draw.text((_s(122), y + _s(50)), main, font=_font(regular, _s(21)), fill="#334155")
-
-            sub = _ellipsize(draw, entry.get("sub", ""), _font(regular, _s(17)), _s(width - 122 - 44))
-            draw.text((_s(122), y + _s(78)), sub, font=_font(regular, _s(17)), fill="#94A3B8")
-            y += _s(row_h + gap)
+                sub = _ellipsize(draw, entry.get("sub", ""), _font(regular, _s(17)), _s(width - 122 - 44))
+                draw.text((_s(122), y + _s(78 - _s(0))), sub, font=_font(regular, _s(17)), fill="#94A3B8")
+                y += _s(row_h + row_gap)
+            elif kind == "divider":
+                draw.text((_s(48), y + _s(4)), str(payload), font=_font(bold, _s(18)), fill="#64748B")
+                y += _s(divider_h)
+            else:
+                chip_w = (width - 56 - 2 * 10) / 3
+                for index, entry in enumerate(payload):
+                    x = 28 + index * (chip_w + 10)
+                    draw.rounded_rectangle(
+                        (_s(x), y, _s(x + chip_w), y + _s(chip_h)),
+                        radius=_s(12),
+                        fill="#F8FAFC",
+                        outline="#E2E8F0",
+                        width=_s(1),
+                    )
+                    _draw_avatar(
+                        image, draw,
+                        _s(x + 26), y + _s(chip_h // 2), _s(16),
+                        str(entry.get("avatar") or ""), entry.get("name", ""),
+                    )
+                    name_x = x + 52
+                    name_w = chip_w - 52 - 10
+                    name = _ellipsize(draw, entry.get("name", ""), _font(bold, _s(16)), _s(name_w))
+                    draw.text((_s(name_x), y + _s(9)), name, font=_font(bold, _s(16)), fill="#0F172A")
+                    hours = entry.get("hours")
+                    note = f"{hours:.1f} 小时" if isinstance(hours, (int, float)) else "无课"
+                    note = _ellipsize(draw, note, _font(regular, _s(12)), _s(name_w))
+                    draw.text((_s(name_x), y + _s(31)), note, font=_font(regular, _s(12)), fill="#94A3B8")
+                y += _s(chip_h + chip_gap)
 
         draw.line(
             (_s(48), _s(height - 52), _s(width - 48), _s(height - 52)),
@@ -750,8 +819,8 @@ def render_everyone(
             width=_s(1),
         )
         draw.text((_s(48), _s(height - 40)), footer_note, font=_font(regular, _s(14)), fill="#94A3B8")
-        if len(chunks) > 1:
-            label = f"{page_no} / {len(chunks)}"
+        if len(pages) > 1:
+            label = f"{page_no} / {len(pages)}"
             page_font = _font(bold, _s(14))
             draw.text(
                 (_s(width - 48) - page_font.getlength(label), _s(height - 40)),

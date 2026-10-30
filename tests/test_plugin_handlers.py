@@ -558,13 +558,20 @@ def test_scheduled_broadcasts_work_without_session_origin(tmp_path):
             {
                 "recap_enabled": True,
                 "recap_time": "21:00",
-                "recap_weekday": 5,
+                "recap_weekday": 0,  # 0 会在函数内被钳到 1，再在用例里换成今天
                 "recap_top": 5,
             },
             22,
         ),
     ]
+    import main as plugin_main
+    today_weekday = plugin_main.ScheduleLitePlugin(
+        types.SimpleNamespace(send_message=None), {}
+    )._now().isoweekday()
     for config, hour in cases:
+        config = dict(config)
+        if "recap_weekday" in config:
+            config["recap_weekday"] = today_weekday
         plugin, ctx, now = make(config)
         assert plugin._group_origins() == {
             "123456789": "aiocqhttp:GroupMessage:123456789"
@@ -2038,6 +2045,53 @@ def test_render_merges_half_empty_last_page(image_plugin, tmp_path):
         font_path="",
     )
     assert len(paths) == 1, "9 人时不应拆出只有 1 人的第二页"
+
+
+def test_render_groups_ended_into_compact_grid(image_plugin, tmp_path):
+    """已下课/无课压成 3 列小卡，21 人也只出一张图。"""
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    entries = [
+        {"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": "", "avatar": ""},
+    ]
+    for i in range(20):
+        entries.append({
+            "name": f"同学{i}", "type": 4, "label": "已结束",
+            "main": "今日课程已上完", "sub": "上午 1.0 小时",
+            "avatar": "", "hours": 1.0,
+        })
+    paths = render.render_everyone(
+        entries,
+        tmp_path / "cache" / "everyone",
+        page_size=8,
+        width=900,
+        font_path="",
+    )
+    assert len(paths) == 1, "重点 1 行 + 20 个已下课应合并成一张图"
+
+
+def test_render_keeps_full_rows_for_key_states(image_plugin, tmp_path):
+    """翘课/请假/上课中/下一节仍用整行展示，头像字段继续透传。"""
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    entries = [
+        {"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": "", "avatar": ""},
+        {"name": "李四", "type": 3, "label": "下一节", "main": "课", "sub": "", "avatar": ""},
+        {"name": "王五", "type": 4, "label": "已结束", "main": "今日课程已上完",
+         "sub": "上午 1.0 小时", "avatar": "", "hours": 1.0},
+    ]
+    paths = render.render_everyone(
+        entries,
+        tmp_path / "cache" / "everyone",
+        page_size=8,
+        width=900,
+        font_path="",
+    )
+    assert len(paths) == 1
 
 
 def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
