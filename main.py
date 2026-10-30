@@ -238,7 +238,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.16",
+    "v1.5.17",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
