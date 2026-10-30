@@ -62,8 +62,10 @@ def test_status_now_in_class_and_next():
     assert upcoming["type"] == 3
     assert "后" in upcoming["sub"]
 
+    # 上午的课上完、下午没课时，晚上按「下午没课」处理，不再冒充已结束
     finished = status_now(tt, datetime(2026, 9, 7, 20, 0, tzinfo=TZ))
-    assert finished["type"] == 4
+    assert finished["type"] == 5
+    assert finished["main"] == "下午没有课"
 
 
 def test_status_now_abandoned_only_current_course():
@@ -81,7 +83,56 @@ def test_status_now_abandoned_only_current_course():
     assert before["main"] == "高等数学"
 
     after = status_now(tt, datetime(2026, 9, 7, 20, 0, tzinfo=TZ))
-    assert after["type"] == 4
+    assert after["type"] == 5
+    assert after["main"] == "下午没有课"
+
+
+def test_status_half_day_scoping():
+    from schedule_lite_core.model import Course
+
+    tt = make_timetable()
+    tt.courses = [
+        Course(name="高等数学", day=1, weeks=[1], start="08:00", end="09:40"),
+        Course(name="大学物理", day=1, weeks=[1], start="14:00", end="15:40"),
+    ]
+
+    # 上午：上午课上完 → 已结束，只统计上午课时；不预告下午的课
+    morning = status_now(tt, datetime(2026, 9, 7, 11, 0, tzinfo=TZ))
+    assert morning["type"] == 4
+    assert morning["main"] == "上午课程已上完"
+    assert morning["hours"] == 1.7
+
+    # 下午：下午课上完 → 已结束，只统计下午课时
+    afternoon = status_now(tt, datetime(2026, 9, 7, 16, 30, tzinfo=TZ))
+    assert afternoon["type"] == 4
+    assert afternoon["main"] == "下午课程已上完"
+    assert afternoon["hours"] == 1.7
+
+    # 只有上午课的人，下午查 → 下午没课（无课程，可被隐藏）
+    tt.courses = [
+        Course(name="高等数学", day=1, weeks=[1], start="08:00", end="09:40"),
+    ]
+    tt.invalidate_index()
+    night = status_now(tt, datetime(2026, 9, 7, 20, 0, tzinfo=TZ))
+    assert night["type"] == 5
+    assert night["main"] == "下午没有课"
+
+    # 只有下午课的人，上午查 → 上午没课
+    tt.courses = [
+        Course(name="大学物理", day=1, weeks=[1], start="14:00", end="15:40"),
+    ]
+    tt.invalidate_index()
+    early = status_now(tt, datetime(2026, 9, 7, 9, 0, tzinfo=TZ))
+    assert early["type"] == 5
+    assert early["main"] == "上午没有课"
+
+    # 跨中午的课两边都算：12:10 仍显示进行中
+    tt.courses = [
+        Course(name="实验", day=1, weeks=[1], start="11:00", end="12:30"),
+    ]
+    tt.invalidate_index()
+    crossing = status_now(tt, datetime(2026, 9, 7, 12, 10, tzinfo=TZ))
+    assert crossing["type"] == 1
 
 
 def test_format_day_marks_only_skipped_course():
@@ -292,23 +343,6 @@ def test_course_in_half_boundaries():
     assert course_in_half("11:00", "12:30", "morning") is True
     assert course_in_half("11:00", "12:30", "afternoon") is True
     assert course_in_half("14:00", "15:40", "morning") is False
-
-
-def test_status_finished_wording_and_hours():
-    from schedule_lite_core.model import Course
-
-    tt = make_timetable()
-    tt.courses = [
-        Course(name="高等数学", day=1, weeks=[1], start="08:00", end="09:40"),
-        Course(name="大学物理", day=1, weeks=[1], start="14:00", end="15:40"),
-    ]
-    status = status_now(tt, datetime(2026, 9, 7, 22, 0, tzinfo=TZ))
-    assert status["type"] == 4
-    assert status["main"] == "今日课程已上完"
-    # 上/下午课时拆分进 sub，不再出现「上午课程已上完」这种到晚上才看的别扭话术
-    assert "上午 1.7 小时" in status["sub"]
-    assert "下午 1.7 小时" in status["sub"]
-    assert status["hours"] == 3.3
 
 
 def test_rank_shows_my_position():

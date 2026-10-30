@@ -420,6 +420,24 @@ def status_now(
             result.update(type=5, order=(5, 0), main="今日无课程", sub="")
         return result
 
+    # 上午只看上午的课，下午只看下午的课（与 /课表 查询的分段规则一致）：
+    # 上午结课的人，下午再查按「下午没课」处理，不再冒充已结束
+    now_half = half_of(now_min)
+    tuples = [
+        (item.course, item.start, item.end)
+        for item in items
+        if course_in_half(item.start, item.end, now_half)
+    ]
+    if not tuples:
+        result.update(
+            type=5,
+            order=(5, 0),
+            main=f"{half_label(now_half)}没有课",
+            sub="",
+        )
+        return result
+    starts = [minutes_of(start) or 0 for _course, start, _end in tuples]
+
     in_class = [
         (c, s, e)
         for c, s, e in tuples
@@ -467,22 +485,11 @@ def status_now(
         return result
 
     total = sum((minutes_of(e) or 0) - (minutes_of(s) or 0) for _, s, e in tuples)
-    morning_total = sum(
-        (minutes_of(e) or 0) - (minutes_of(s) or 0)
-        for _c, s, e in tuples
-        if (minutes_of(s) or 0) < NOON_MINUTES
-    )
-    afternoon_total = max(total - morning_total, 0)
-    parts = []
-    if morning_total > 0:
-        parts.append(f"上午 {morning_total / 60:.1f} 小时")
-    if afternoon_total > 0:
-        parts.append(f"下午 {afternoon_total / 60:.1f} 小时")
     result.update(
         type=4,
         order=(4, -total),
-        main="今日课程已上完",
-        sub=" · ".join(parts) if parts else "今天没有课",
+        main=f"{half_label(now_half)}课程已上完",
+        sub=f"共 {total / 60:.1f} 小时",
     )
     result["hours"] = round(total / 60, 1)
     return result
