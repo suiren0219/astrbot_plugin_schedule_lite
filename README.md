@@ -211,7 +211,10 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
   发送本周/本月累计上课时间 Top N，`recap_mode` 选 `week` 或 `month`
 
 只向用过课表的群发送，每个群每天最多一次；发送状态持久化在
-`broadcast_state.json`，重启不会重复发送。
+`broadcast_state.json`，重启不会重复发送。到点后 3 小时内仍会补发
+（机器人晚启动或短暂离线不会漏），超过窗口当天不再补。
+群会话 ID 从聊天记录里取；只填了群号（控制台导入或面板编辑）时会按
+`平台:GroupMessage:群号` 推导，所以面板里填的群也能收到节目。
 
 ## 导入时的数据优化
 

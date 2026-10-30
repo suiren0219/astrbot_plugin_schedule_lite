@@ -503,6 +503,140 @@ def test_session_scope_blocks_commands(plugin):
     assert allowed and "没有启用" not in allowed[0]
 
 
+def test_scheduled_broadcasts_work_without_session_origin(tmp_path):
+    """控制台导入或面板里手填群号时没有会话 ID，定时节目仍要能推导并发送。"""
+    import main as plugin_main
+    from schedule_lite_core.model import Course, Timetable
+    from datetime import timedelta
+
+    class _Ctx:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, origin, chain):
+            self.sent.append(origin)
+
+    def make(config):
+        plugin_main.StarTools._dir = tmp_path / str(abs(hash(str(config))))
+        (tmp_path / str(abs(hash(str(config))))).mkdir(parents=True, exist_ok=True)
+        ctx = _Ctx()
+        plugin = plugin_main.ScheduleLitePlugin(ctx, config)
+        now = plugin._now()
+        today = now.date()
+        tomorrow = today + timedelta(days=1)
+        weeks = list(range(1, 21))
+        rows = [
+            ("10001", "张三", today.isoweekday(), "08:00", "18:00"),
+            ("10002", "李四", today.isoweekday(), "08:00", "12:00"),
+            ("10003", "王五", tomorrow.isoweekday(), "08:00", "09:40"),
+        ]
+        for uid, name, day, start, end in rows:
+            tt = Timetable(
+                owner_id=uid,
+                owner_name=name,
+                term_start="2026-08-31",
+                total_weeks=20,
+                courses=[Course(name="课", day=day, weeks=weeks, start=start, end=end)],
+            )
+            # 只在记录里写了群号，没有 group_origins
+            tt.groups = ["123456789"]
+            plugin.store.put(f"aiocqhttp:{uid}", tt)
+        return plugin, ctx, now
+
+    cases = [
+        ({"early_enabled": True, "early_time": "21:30", "early_max_start": "9:30"}, 22),
+        (
+            {
+                "showcase_enabled": True,
+                "showcase_time": "22:30",
+                "showcase_min_minutes": 240,
+                "showcase_min_users": 1,
+            },
+            23,
+        ),
+        (
+            {
+                "recap_enabled": True,
+                "recap_time": "21:00",
+                "recap_weekday": 5,
+                "recap_top": 5,
+            },
+            22,
+        ),
+    ]
+    for config, hour in cases:
+        plugin, ctx, now = make(config)
+        assert plugin._group_origins() == {
+            "123456789": "aiocqhttp:GroupMessage:123456789"
+        }
+        asyncio.run(plugin._check_scheduled_broadcasts(now.replace(hour=hour, minute=5)))
+        assert ctx.sent == ["aiocqhttp:GroupMessage:123456789"], config
+
+
+def test_broadcast_respects_catchup_window(tmp_path):
+    """到点后 3 小时内可补发；超过窗口不再补，避免深夜冒出早八提醒。"""
+    import main as plugin_main
+    from schedule_lite_core.model import Course, Timetable
+
+    class _Ctx:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, origin, chain):
+            self.sent.append(origin)
+
+    def prepare():
+        plugin_main.StarTools._dir = tmp_path / "win"
+        (tmp_path / "win").mkdir(parents=True, exist_ok=True)
+        ctx = _Ctx()
+        plugin = plugin_main.ScheduleLitePlugin(ctx, {
+            "showcase_enabled": True,
+            "showcase_time": "22:30",
+            "showcase_min_minutes": 1,
+            "showcase_min_users": 1,
+        })
+        today = plugin._now().date()
+        tt = Timetable(
+            owner_id="10001",
+            owner_name="张三",
+            term_start="2026-08-31",
+            total_weeks=20,
+            courses=[Course(name="课", day=today.isoweekday(), weeks=list(range(1, 21)), start="08:00", end="18:00")],
+        )
+        tt.groups = ["123456789"]
+        plugin.store.put("aiocqhttp:10001", tt)
+        return plugin, ctx
+
+    # 22:35 在窗口内
+    plugin, ctx = prepare()
+    asyncio.run(plugin._check_scheduled_broadcasts(plugin._now().replace(hour=22, minute=35)))
+    assert len(ctx.sent) == 1
+
+    # 次日 02:00 已超窗口，不补发
+    plugin, ctx = prepare()
+    asyncio.run(plugin._check_scheduled_broadcasts(plugin._now().replace(hour=2, minute=0)))
+    assert ctx.sent == []
+
+
+def test_notify_loop_starts_even_if_reminders_disabled(tmp_path):
+    """三个定时节目和上课提醒共用后台循环，提醒关掉时循环也必须启动。"""
+    import main as plugin_main
+
+    plugin_main.StarTools._dir = tmp_path
+    ctx = types.SimpleNamespace(send_message=None)
+    plugin = plugin_main.ScheduleLitePlugin(ctx, {"notify_enabled": False})
+    assert plugin._notify_task is None
+
+    async def check():
+        await plugin.initialize()
+        task = plugin._notify_task
+        assert task is not None
+        assert not task.cancelled() and not task.done()
+        await plugin.terminate()
+
+    asyncio.run(check())
+
+
 def test_session_scope_filters_scheduled_broadcasts(tmp_path):
     import main as plugin_main
     from schedule_lite_core.model import Course, Timetable
@@ -537,7 +671,9 @@ def test_session_scope_filters_scheduled_broadcasts(tmp_path):
         tt.remember_group(group, f"test:group:{group}")
         plugin.store.put(f"test:{group}", tt)
 
-    asyncio.run(plugin._check_scheduled_broadcasts(plugin._now()))
+    asyncio.run(
+        plugin._check_scheduled_broadcasts(plugin._now().replace(hour=0, minute=5))
+    )
     assert ctx.sent == ["test:group:g1"]
 
 

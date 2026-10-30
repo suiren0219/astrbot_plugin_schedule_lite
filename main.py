@@ -45,6 +45,10 @@ from astrbot.api.star import Context, Star, StarTools, register
 PLUGIN_NAME = "astrbot_plugin_schedule_lite"
 PLUGIN_DIR = os.path.dirname(os.path.abspath(__file__))
 
+# 定时节目超过设定时间多久仍允许补发（分钟）。机器人晚启动或短暂离线时
+# 当天还能补上，超过窗口就不再补，避免深夜才冒出「早八提醒」。
+_BROADCAST_WINDOW_MIN = 180
+
 # 允许以包或单文件方式加载
 try:
     from .schedule_lite_core import render as render_mod
@@ -234,7 +238,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.14",
+    "v1.5.15",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -287,8 +291,8 @@ class ScheduleLitePlugin(Star):
         if self._cfg("holiday_enabled", True):
             self._holiday_task = asyncio.create_task(self._holiday_loop())
         self._register_web_apis()
-        if self._cfg("notify_enabled", True):
-            self._notify_task = asyncio.create_task(self._notify_loop())
+        # 后台循环同时承担「上课提醒」和三个定时节目，不能只在提醒开关打开时才启动
+        self._notify_task = asyncio.create_task(self._notify_loop())
         logger.info(f"[{PLUGIN_NAME}] 已加载，共 {len(self.store.all())} 份课表")
 
     # ---------------------------------------------------------- 会话生效范围
@@ -2208,6 +2212,24 @@ class ScheduleLitePlugin(Star):
             self._group_index[group_id] = cached
         return list(cached)
 
+    def _guess_group_origin(self, group_id: str, platform: str = "") -> str:
+        """控制台导入或在面板里手填群号时没有会话 ID，按平台习惯推导一个。
+
+        AstrBot 的会话 ID 通常是 `平台:消息类型:目标`，群消息即
+        `aiocqhttp:GroupMessage:<群号>`。推导不出来就返回空，避免瞎发。
+        """
+        gid = str(group_id or "").strip()
+        if not gid:
+            return ""
+        plat = str(platform or "").strip() or str(
+            self._cfg("default_platform", "aiocqhttp") or "aiocqhttp"
+        )
+        if ":" in plat:
+            plat = plat.split(":", 1)[0]
+        if not re.fullmatch(r"[0-9A-Za-z_.-]{1,32}", plat):
+            return ""
+        return f"{plat}:GroupMessage:{gid}"
+
     def _group_origins(self) -> dict[str, str]:
         if self._origins_cache is not None:
             return self._origins_cache
@@ -2216,6 +2238,17 @@ class ScheduleLitePlugin(Star):
             for group_id, origin in tt.group_origins.items():
                 if origin and group_id not in origins:
                     origins[group_id] = origin
+        # 只有群号、没有会话 ID 的绑定（控制台导入 / 手填群号）也要能推送。
+        # 平台从存档键「平台:用户ID」里取，取不到再用配置里的默认平台。
+        for key, tt in self.store.all().items():
+            platform = str(key).split(":", 1)[0] if ":" in str(key) else ""
+            for group_id in tt.groups:
+                gid = str(group_id or "").strip()
+                if not gid or gid in origins:
+                    continue
+                guessed = self._guess_group_origin(gid, platform)
+                if guessed:
+                    origins[gid] = guessed
         self._origins_cache = origins
         return origins
 
@@ -2345,7 +2378,8 @@ class ScheduleLitePlugin(Star):
             target = hour * 60 + minute
             max_start = minutes_of(str(self._cfg("early_max_start", "08:00") or "08:00")) or 480
             use_at = bool(self._cfg("early_at", False))
-            if now_min >= target:
+            # 到点后当天补发窗口内都可以发，机器人晚启动也能补上；过了窗口不再打扰
+            if target <= now_min <= target + _BROADCAST_WINDOW_MIN:
                 tomorrow = today + timedelta(days=1)
                 calendar_tomorrow = self._calendar_for(tomorrow)
                 tomorrow_off = bool(
@@ -2403,7 +2437,7 @@ class ScheduleLitePlugin(Star):
                 str(self._cfg("showcase_time", "22:30") or "22:30"), "22:30"
             )
             target = hour * 60 + minute
-            if now_min >= target:
+            if target <= now_min <= target + _BROADCAST_WINDOW_MIN:
                 try:
                     min_minutes = max(
                         30, min(int(self._cfg("showcase_min_minutes", 300)), 1440)
@@ -2474,7 +2508,7 @@ class ScheduleLitePlugin(Star):
                 weekday = 5
             calendar = self._calendar_for(today)
             holiday_eve = bool(calendar and calendar.holiday_eve(today))
-            if now_min >= target and (
+            if target <= now_min <= target + _BROADCAST_WINDOW_MIN and (
                 today.isoweekday() == weekday or holiday_eve
             ):
                 mode = str(self._cfg("recap_mode", "week") or "week")
@@ -3433,8 +3467,7 @@ class ScheduleLitePlugin(Star):
             logger.exception(f"[{PLUGIN_NAME}] 恢复备份失败")
             return self._err(str(exc), 500)
 
-    _SETTING_KEYS = (
-        "store_location",
+    _SETTING_KEYS = (        "store_location",
         "show_location",
         "everyone_image",
         "avatar_enabled",
