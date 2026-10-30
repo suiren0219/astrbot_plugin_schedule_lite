@@ -467,15 +467,24 @@ def status_now(
         return result
 
     total = sum((minutes_of(e) or 0) - (minutes_of(s) or 0) for _, s, e in tuples)
-    # 用最后一节课的结课时间判断是上午还是下午结束，避免上午结课后误报“今日”
-    last_end = max((minutes_of(e) or 0) for _, _s, e in tuples)
-    finished_half = "morning" if last_end <= NOON_MINUTES else "afternoon"
+    morning_total = sum(
+        (minutes_of(e) or 0) - (minutes_of(s) or 0)
+        for _c, s, e in tuples
+        if (minutes_of(s) or 0) < NOON_MINUTES
+    )
+    afternoon_total = max(total - morning_total, 0)
+    parts = []
+    if morning_total > 0:
+        parts.append(f"上午 {morning_total / 60:.1f} 小时")
+    if afternoon_total > 0:
+        parts.append(f"下午 {afternoon_total / 60:.1f} 小时")
     result.update(
         type=4,
         order=(4, -total),
-        main=f"{half_label(finished_half)}课程已上完",
-        sub=f"今日共计 {total / 60:.1f} 小时",
+        main="今日课程已上完",
+        sub=" · ".join(parts) if parts else "今天没有课",
     )
+    result["hours"] = round(total / 60, 1)
     return result
 
 def everyone_entries(
@@ -512,6 +521,7 @@ def everyone_entries(
                 "main": status["main"],
                 "sub": status["sub"],
                 "order": status["order"],
+                "hours": status.get("hours"),
             }
         )
     entries.sort(key=lambda item: (STATUS_PRIORITY.get(item["type"], 9), item["order"]))

@@ -294,14 +294,21 @@ def test_course_in_half_boundaries():
     assert course_in_half("14:00", "15:40", "morning") is False
 
 
-def test_status_after_morning_uses_morning_wording():
+def test_status_finished_wording_and_hours():
+    from schedule_lite_core.model import Course
+
     tt = make_timetable()
     tt.courses = [
-        c for c in tt.courses if c.name == "高等数学"
+        Course(name="高等数学", day=1, weeks=[1], start="08:00", end="09:40"),
+        Course(name="大学物理", day=1, weeks=[1], start="14:00", end="15:40"),
     ]
-    status = status_now(tt, datetime(2026, 9, 7, 15, 0, tzinfo=TZ))
+    status = status_now(tt, datetime(2026, 9, 7, 22, 0, tzinfo=TZ))
     assert status["type"] == 4
-    assert "上午课程已上完" in status["main"]
+    assert status["main"] == "今日课程已上完"
+    # 上/下午课时拆分进 sub，不再出现「上午课程已上完」这种到晚上才看的别扭话术
+    assert "上午 1.7 小时" in status["sub"]
+    assert "下午 1.7 小时" in status["sub"]
+    assert status["hours"] == 3.3
 
 
 def test_rank_shows_my_position():
