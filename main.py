@@ -238,7 +238,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.17",
+    "v1.5.18",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -2353,209 +2353,209 @@ class ScheduleLitePlugin(Star):
                 lines.append(f"📅 {item['name']} {day:%m/%d} · {when}")
         return lines
 
-    async def _check_scheduled_broadcasts(self, now: datetime) -> None:
-        showcase_enabled = bool(self._cfg("showcase_enabled", False))
-        recap_enabled = bool(self._cfg("recap_enabled", False))
-        early_enabled = bool(self._cfg("early_enabled", False))
-        if not showcase_enabled and not recap_enabled and not early_enabled:
-            return
-        today = now.date()
-        now_min = now.hour * 60 + now.minute
+    def _broadcast_origins(self) -> dict[str, str]:
+        """定时推送可用的群会话，已按会话生效范围过滤。"""
         origins = self._group_origins()
-        # 会话生效范围同样作用于定时推送：白名单外的群不发节目
-        origins = {
+        return {
             group_id: origin
             for group_id, origin in origins.items()
             if self._origin_allowed(origin)
         }
+
+    async def _check_scheduled_broadcasts(self, now: datetime) -> None:
+        if not (
+            bool(self._cfg("showcase_enabled", False))
+            or bool(self._cfg("recap_enabled", False))
+            or bool(self._cfg("early_enabled", False))
+        ):
+            return
+        origins = self._broadcast_origins()
         if not origins:
             return
+        await self._run_early_push(now, origins)
+        await self._run_showcase(now, origins)
+        await self._run_recap(now, origins)
 
-        if early_enabled:
-            hour, minute = self._hhmm(
-                str(self._cfg("early_time", "21:30") or "21:30"), "21:30"
-            )
-            target = hour * 60 + minute
-            max_start = minutes_of(str(self._cfg("early_max_start", "08:00") or "08:00")) or 480
-            use_at = bool(self._cfg("early_at", False))
-            # 到点后当天补发窗口内都可以发，机器人晚启动也能补上；过了窗口不再打扰
-            if target <= now_min <= target + _BROADCAST_WINDOW_MIN:
-                tomorrow = today + timedelta(days=1)
-                calendar_tomorrow = self._calendar_for(tomorrow)
-                tomorrow_off = bool(
-                    calendar_tomorrow and calendar_tomorrow.is_off(tomorrow)
-                )
-                event_lines = self._upcoming_event_lines(tomorrow)
-                for group_id, origin in origins.items():
-                    if tomorrow_off:
-                        continue
-                    visible = self._group_timetables(group_id)
-                    rows = []
-                    for tt in visible:
-                        if tt.leave_on(tomorrow):
-                            continue
-                        items = day_entries(tt, tomorrow, calendar_tomorrow)
-                        if not items:
-                            continue
-                        first = items[0]
-                        if (minutes_of(first.start) or 1440) > max_start:
-                            continue
-                        rows.append((tt, first))
-                    if not rows:
-                        continue
-                    if not self._claim_broadcast("early", group_id, today):
-                        continue
-                    rows.sort(key=lambda row: minutes_of(row[1].start) or 0)
-                    header = (
-                        f"⏰ 明日早八提醒 · {tomorrow:%m/%d} {weekday_cn(tomorrow)}"
-                        f" · 共 {len(rows)} 人"
-                    )
-                    if use_at:
-                        chain = self._build_at_chain(rows, header)
-                    else:
-                        chain = None
-                    if chain is None:
-                        lines = [header]
-                        for index, (tt, item) in enumerate(rows[:20], 1):
-                            course = item.course
-                            line = (
-                                f"{index}. {tt.owner_name or tt.owner_id} · "
-                                f"{course.name} {item.start}-{item.end}"
-                            )
-                            if course.location and self._show_location():
-                                line += f" @{course.location}"
-                            lines.append(line)
-                        chain = MessageChain().message("\n".join(lines))
-                    try:
-                        await self.context.send_message(origin, chain)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(f"[{PLUGIN_NAME}] 早八推送失败 {group_id}: {exc}")
-                        self._release_broadcast("early", group_id)
+    def _in_broadcast_window(self, time_text: str, default_text: str, now_min: int) -> bool:
+        """到点后当天补发窗口内都算命中；超过窗口不再补，避免深夜打扰。"""
+        hour, minute = self._hhmm(time_text, default_text)
+        target = hour * 60 + minute
+        return target <= now_min <= target + _BROADCAST_WINDOW_MIN
 
-        if showcase_enabled:
-            hour, minute = self._hhmm(
-                str(self._cfg("showcase_time", "22:30") or "22:30"), "22:30"
+    async def _run_early_push(self, now: datetime, origins: dict[str, str]) -> None:
+        if not bool(self._cfg("early_enabled", False)):
+            return
+        today = now.date()
+        now_min = now.hour * 60 + now.minute
+        if not self._in_broadcast_window(
+            str(self._cfg("early_time", "21:30") or "21:30"), "21:30", now_min
+        ):
+            return
+        max_start = minutes_of(str(self._cfg("early_max_start", "08:00") or "08:00")) or 480
+        use_at = bool(self._cfg("early_at", False))
+        tomorrow = today + timedelta(days=1)
+        calendar_tomorrow = self._calendar_for(tomorrow)
+        tomorrow_off = bool(calendar_tomorrow and calendar_tomorrow.is_off(tomorrow))
+        for group_id, origin in origins.items():
+            if tomorrow_off:
+                continue
+            rows = []
+            for tt in self._group_timetables(group_id):
+                if tt.leave_on(tomorrow):
+                    continue
+                items = day_entries(tt, tomorrow, calendar_tomorrow)
+                if not items:
+                    continue
+                first = items[0]
+                if (minutes_of(first.start) or 1440) > max_start:
+                    continue
+                rows.append((tt, first))
+            if not rows or not self._claim_broadcast("early", group_id, today):
+                continue
+            rows.sort(key=lambda row: minutes_of(row[1].start) or 0)
+            header = (
+                f"⏰ 明日早八提醒 · {tomorrow:%m/%d} {weekday_cn(tomorrow)}"
+                f" · 共 {len(rows)} 人"
             )
-            target = hour * 60 + minute
-            if target <= now_min <= target + _BROADCAST_WINDOW_MIN:
-                try:
-                    min_minutes = max(
-                        30, min(int(self._cfg("showcase_min_minutes", 300)), 1440)
+            chain = self._build_at_chain(rows, header) if use_at else None
+            if chain is None:
+                lines = [header]
+                for index, (tt, item) in enumerate(rows[:20], 1):
+                    course = item.course
+                    line = (
+                        f"{index}. {tt.owner_name or tt.owner_id} · "
+                        f"{course.name} {item.start}-{item.end}"
                     )
-                except (TypeError, ValueError):
-                    min_minutes = 300
-                try:
-                    min_users = max(1, min(int(self._cfg("showcase_min_users", 2)), 50))
-                except (TypeError, ValueError):
-                    min_users = 2
-                calendar = self._calendar_for(today)
-                for group_id, origin in origins.items():
-                    visible = self._group_timetables(group_id)
-                    ranked = []
-                    for tt in visible:
-                        if tt.leave_on(today):
-                            continue
-                        minutes = sum(
-                            max((minutes_of(e) or 0) - (minutes_of(s) or 0), 0)
-                            for _c, s, e in day_courses(tt, today, calendar)
-                        )
-                        if minutes >= min_minutes:
-                            ranked.append((minutes, tt.owner_name or tt.owner_id))
-                    if len(ranked) < min_users:
-                        continue
-                    if not self._claim_broadcast("showcase", group_id, today):
-                        continue
-                    ranked.sort(reverse=True)
-                    subtitle = (
-                        f"{today:%m/%d} · 满 {min_minutes / 60:.0f} 小时以上"
-                        f" · 共 {len(ranked)} 人"
-                    )
-                    paths = self._render_rank_card(
-                        "🌙 今日满课榜",
-                        subtitle,
-                        [
-                            {
-                                "name": name,
-                                "label": f"#{index}",
-                                "main": f"{minutes / 60:.1f} 小时",
-                                "sub": "",
-                            }
-                            for index, (minutes, name) in enumerate(ranked[:20], 1)
-                        ],
-                    )
-                    chain = self._rank_image_chain(paths)
-                    if chain is None:
-                        lines = ["🌙 今日满课榜", f"{today:%m/%d} · 共 {len(ranked)} 人"]
-                        for index, (minutes, name) in enumerate(ranked[:10], 1):
-                            lines.append(f"{index}. {name} · {minutes / 60:.1f} 小时")
-                        chain = MessageChain().message("\n".join(lines))
-                    try:
-                        await self.context.send_message(origin, chain)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(f"[{PLUGIN_NAME}] 满课榜发送失败 {group_id}: {exc}")
-                        self._release_broadcast("showcase", group_id)
-
-        if recap_enabled:
-            hour, minute = self._hhmm(
-                str(self._cfg("recap_time", "21:00") or "21:00"), "21:00"
-            )
-            target = hour * 60 + minute
+                    if course.location and self._show_location():
+                        line += f" @{course.location}"
+                    lines.append(line)
+                chain = MessageChain().message("\n".join(lines))
             try:
-                weekday = max(
-                    1, min(int(self._cfg("recap_weekday", 5)), 7)
+                await self.context.send_message(origin, chain)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 早八推送失败 {group_id}: {exc}")
+                self._release_broadcast("early", group_id)
+
+    async def _run_showcase(self, now: datetime, origins: dict[str, str]) -> None:
+        if not bool(self._cfg("showcase_enabled", False)):
+            return
+        today = now.date()
+        now_min = now.hour * 60 + now.minute
+        if not self._in_broadcast_window(
+            str(self._cfg("showcase_time", "22:30") or "22:30"), "22:30", now_min
+        ):
+            return
+        try:
+            min_minutes = max(30, min(int(self._cfg("showcase_min_minutes", 300)), 1440))
+        except (TypeError, ValueError):
+            min_minutes = 300
+        try:
+            min_users = max(1, min(int(self._cfg("showcase_min_users", 2)), 50))
+        except (TypeError, ValueError):
+            min_users = 2
+        calendar = self._calendar_for(today)
+        for group_id, origin in origins.items():
+            ranked = []
+            for tt in self._group_timetables(group_id):
+                if tt.leave_on(today):
+                    continue
+                minutes = sum(
+                    max((minutes_of(e) or 0) - (minutes_of(s) or 0), 0)
+                    for _c, s, e in day_courses(tt, today, calendar)
                 )
-            except (TypeError, ValueError):
-                weekday = 5
-            calendar = self._calendar_for(today)
-            holiday_eve = bool(calendar and calendar.holiday_eve(today))
-            if target <= now_min <= target + _BROADCAST_WINDOW_MIN and (
-                today.isoweekday() == weekday or holiday_eve
-            ):
-                mode = str(self._cfg("recap_mode", "week") or "week")
-                if mode not in ("week", "month"):
-                    mode = "week"
-                try:
-                    top_n = max(1, min(int(self._cfg("recap_top", 5)), 20))
-                except (TypeError, ValueError):
-                    top_n = 5
-                for group_id, origin in origins.items():
-                    visible = self._group_timetables(group_id)
-                    ranked = []
-                    for tt in visible:
-                        hours = self._period_hours(tt, mode, today)
-                        if hours > 0:
-                            ranked.append((hours, tt.owner_name or tt.owner_id))
-                    if len(ranked) < 2:
-                        continue
-                    if not self._claim_broadcast("recap", group_id, today):
-                        continue
-                    ranked.sort(reverse=True)
-                    label = "本月" if mode == "month" else "本周"
-                    subtitle = f"截至 {today:%m/%d} · {label}实际在课时长"
-                    paths = self._render_rank_card(
-                        f"📊 {label}累计上课榜",
-                        subtitle,
-                        [
-                            {
-                                "name": name,
-                                "label": f"#{index}",
-                                "main": f"{hours:.1f} 小时",
-                                "sub": "",
-                            }
-                            for index, (hours, name) in enumerate(ranked[:top_n], 1)
-                        ],
-                    )
-                    chain = self._rank_image_chain(paths)
-                    if chain is None:
-                        lines = [f"📊 {label}累计上课榜", f"截至 {today:%m/%d}"]
-                        for index, (hours, name) in enumerate(ranked[:top_n], 1):
-                            lines.append(f"#{index} {name} · {hours:.1f} 小时")
-                        chain = MessageChain().message("\n".join(lines))
-                    try:
-                        await self.context.send_message(origin, chain)
-                    except Exception as exc:  # noqa: BLE001
-                        logger.warning(f"[{PLUGIN_NAME}] 周报发送失败 {group_id}: {exc}")
-                        self._release_broadcast("recap", group_id)
+                if minutes >= min_minutes:
+                    ranked.append((minutes, tt.owner_name or tt.owner_id))
+            if len(ranked) < min_users or not self._claim_broadcast("showcase", group_id, today):
+                continue
+            ranked.sort(reverse=True)
+            subtitle = (
+                f"{today:%m/%d} · 满 {min_minutes / 60:.0f} 小时以上"
+                f" · 共 {len(ranked)} 人"
+            )
+            paths = self._render_rank_card(
+                "🌙 今日满课榜",
+                subtitle,
+                [
+                    {
+                        "name": name,
+                        "label": f"#{index}",
+                        "main": f"{minutes / 60:.1f} 小时",
+                        "sub": "",
+                    }
+                    for index, (minutes, name) in enumerate(ranked[:20], 1)
+                ],
+            )
+            chain = self._rank_image_chain(paths)
+            if chain is None:
+                lines = ["🌙 今日满课榜", f"{today:%m/%d} · 共 {len(ranked)} 人"]
+                for index, (minutes, name) in enumerate(ranked[:10], 1):
+                    lines.append(f"{index}. {name} · {minutes / 60:.1f} 小时")
+                chain = MessageChain().message("\n".join(lines))
+            try:
+                await self.context.send_message(origin, chain)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 满课榜发送失败 {group_id}: {exc}")
+                self._release_broadcast("showcase", group_id)
+
+    async def _run_recap(self, now: datetime, origins: dict[str, str]) -> None:
+        if not bool(self._cfg("recap_enabled", False)):
+            return
+        today = now.date()
+        now_min = now.hour * 60 + now.minute
+        try:
+            weekday = max(1, min(int(self._cfg("recap_weekday", 5)), 7))
+        except (TypeError, ValueError):
+            weekday = 5
+        calendar = self._calendar_for(today)
+        holiday_eve = bool(calendar and calendar.holiday_eve(today))
+        if today.isoweekday() != weekday and not holiday_eve:
+            return
+        if not self._in_broadcast_window(
+            str(self._cfg("recap_time", "21:00") or "21:00"), "21:00", now_min
+        ):
+            return
+        mode = str(self._cfg("recap_mode", "week") or "week")
+        if mode not in ("week", "month"):
+            mode = "week"
+        try:
+            top_n = max(1, min(int(self._cfg("recap_top", 5)), 20))
+        except (TypeError, ValueError):
+            top_n = 5
+        label = "本月" if mode == "month" else "本周"
+        for group_id, origin in origins.items():
+            ranked = []
+            for tt in self._group_timetables(group_id):
+                hours = self._period_hours(tt, mode, today)
+                if hours > 0:
+                    ranked.append((hours, tt.owner_name or tt.owner_id))
+            if len(ranked) < 2 or not self._claim_broadcast("recap", group_id, today):
+                continue
+            ranked.sort(reverse=True)
+            subtitle = f"截至 {today:%m/%d} · {label}实际在课时长"
+            paths = self._render_rank_card(
+                f"📊 {label}累计上课榜",
+                subtitle,
+                [
+                    {
+                        "name": name,
+                        "label": f"#{index}",
+                        "main": f"{hours:.1f} 小时",
+                        "sub": "",
+                    }
+                    for index, (hours, name) in enumerate(ranked[:top_n], 1)
+                ],
+            )
+            chain = self._rank_image_chain(paths)
+            if chain is None:
+                lines = [f"📊 {label}累计上课榜", f"截至 {today:%m/%d}"]
+                for index, (hours, name) in enumerate(ranked[:top_n], 1):
+                    lines.append(f"#{index} {name} · {hours:.1f} 小时")
+                chain = MessageChain().message("\n".join(lines))
+            try:
+                await self.context.send_message(origin, chain)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 周报发送失败 {group_id}: {exc}")
+                self._release_broadcast("recap", group_id)
 
     # ---------------------------------------------------------- 请假 / 调课 / 调休
 
@@ -3189,30 +3189,109 @@ class ScheduleLitePlugin(Star):
                 groups.append(group_id)
         return groups[:50], {}
 
+    @staticmethod
+    def _api_identity(payload: dict) -> tuple[tuple[str, str, str], str | None]:
+        """解析并校验 key / 平台 / 用户 ID。
+
+        返回 ((key, platform, owner_id), 错误文案)；校验通过时错误文案为 None。
+        """
+        owner_id = str(payload.get("owner_id") or "").strip()
+        platform = str(payload.get("platform") or "aiocqhttp").strip() or "aiocqhttp"
+        key = str(payload.get("key") or "").strip()
+        if not key:
+            if not owner_id:
+                return ("", "", ""), "owner_id 不能为空"
+            key = f"{platform}:{owner_id}"
+        # 用户 ID 只允许数字/字母/-/_，特殊字符直接拒绝
+        if not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", owner_id):
+            return ("", "", ""), "用户 ID 只能包含数字、字母、下划线和短横线"
+        if not re.fullmatch(r"[0-9A-Za-z_-]{1,32}", platform):
+            return ("", "", ""), "平台名不合法"
+        if len(key) > 128 or any(ch in key for ch in "\r\n\t"):
+            return ("", "", ""), "key 不合法"
+        return (key, platform, owner_id), None
+
+    def _api_base_fields(self, tt: Timetable, payload: dict) -> None:
+        """把面板提交的基础字段套到课表副本上；作息清空视为恢复内置默认。"""
+        if "sections" in payload:
+            tt.sections = (
+                parse_section_times(payload.get("sections")) or self._fallback_sections()
+            )
+        elif not tt.sections:
+            tt.sections = self._fallback_sections()
+        tt.name = str(payload.get("name") or tt.name or "我的课表")
+        tt.owner_name = str(payload.get("owner_name") or tt.owner_name)
+        term = parse_date(payload.get("term_start"))
+        if term is not None:
+            tt.term_start = monday_of(term).isoformat()
+        tt.total_weeks = max(1, min(_safe_int(payload.get("total_weeks"), 20), 60))
+        tt.timezone = str(payload.get("timezone") or tt.timezone or self._tz)
+        tt.source = str(payload.get("source") or tt.source or "控制面板")
+
+    def _api_group_bindings(self, tt: Timetable, payload: dict) -> None:
+        """应用面板提交的群绑定与群会话 ID；只出现在 payload 里的键才覆盖。"""
+        if "groups" in payload:
+            tt.groups, _ = self._clean_groups(payload.get("groups"))
+        if "group_origins" in payload:
+            raw_origins = payload.get("group_origins")
+            tt.group_origins = {
+                str(group): str(origin)
+                for group, origin in (
+                    raw_origins.items() if isinstance(raw_origins, dict) else []
+                )
+                if str(group).strip() and str(origin).strip()
+            }
+            if tt.groups:
+                tt.group_origins = {
+                    group: origin
+                    for group, origin in tt.group_origins.items()
+                    if group in tt.groups
+                }
+        if "groups" in payload:
+            tt.group_origins = {
+                group: origin
+                for group, origin in tt.group_origins.items()
+                if group in tt.groups
+            }
+
+    def _api_new_adjustments(self, tt: Timetable, payload: dict) -> str | None:
+        """应用面板新增的调课记录；格式错误返回错误文案，成功返回 None。"""
+        for raw in payload.get("new_adjustments") or []:
+            if not isinstance(raw, dict):
+                continue
+            source = parse_date(raw.get("from_date")) or self._parse_cmd_date(
+                str(raw.get("from_date") or ""), self._now().date()
+            )
+            target = parse_date(raw.get("to_date")) or self._parse_cmd_date(
+                str(raw.get("to_date") or ""), self._now().date()
+            )
+            if source is None or target is None:
+                return "调课日期格式不对"
+            try:
+                self._add_adjustment(
+                    tt,
+                    source,
+                    target,
+                    str(raw.get("course") or "").strip(),
+                    bool(raw.get("swap")),
+                )
+            except ValueError as exc:
+                return str(exc)
+        return None
+
     async def _api_timetable_save(self):
         try:
             payload = await self._json_body()
             if not isinstance(payload, dict):
                 return self._err("请求内容不是对象")
-            owner_id = str(payload.get("owner_id") or "").strip()
-            platform = str(payload.get("platform") or "aiocqhttp").strip() or "aiocqhttp"
-            key = str(payload.get("key") or "").strip()
-            if not key:
-                if not owner_id:
-                    return self._err("owner_id 不能为空")
-                key = f"{platform}:{owner_id}"
-            # 用户 ID 只允许数字/字母/-/_，特殊字符直接拒绝
-            if not re.fullmatch(r"[0-9A-Za-z_-]{1,64}", owner_id):
-                return self._err("用户 ID 只能包含数字、字母、下划线和短横线")
-            if not re.fullmatch(r"[0-9A-Za-z_-]{1,32}", platform):
-                return self._err("平台名不合法")
-            if len(key) > 128 or any(ch in key for ch in "\r\n\t"):
-                return self._err("key 不合法")
+            identity, error = self._api_identity(payload)
+            if error:
+                return self._err(error)
+            key, platform, owner_id = identity
             old = self.store.get(key)
             term = parse_date(payload.get("term_start"))
             if term is None:
                 return self._err("开学日期格式不对，示例：2026-09-07")
-            total_weeks = max(1, min(_safe_int(payload.get("total_weeks"), 20), 60))
             raw_courses = payload.get("courses")
             if not isinstance(raw_courses, list):
                 raw_courses = []
@@ -3225,13 +3304,6 @@ class ScheduleLitePlugin(Star):
             tt = Timetable.from_dict(old.to_dict()) if old else Timetable(
                 owner_id=owner_id or key.split(":", 1)[-1]
             )
-            if "sections" in payload:
-                # 编辑器里清空作息视为恢复内置默认，而不是保留旧值
-                tt.sections = (
-                    parse_section_times(payload.get("sections")) or self._fallback_sections()
-                )
-            elif not tt.sections:
-                tt.sections = self._fallback_sections()
             if owner_id and owner_id != tt.owner_id:
                 # 用户 ID 改动必须同步换存档 key，否则按 id 查不到这份数据
                 new_key = f"{platform}:{owner_id}"
@@ -3243,18 +3315,13 @@ class ScheduleLitePlugin(Star):
                         self.store.delete(key)
                     key = new_key
                     old = self.store.get(key)
+            self._api_base_fields(tt, payload)
             # 用户要求：教师一律不保存；地点可以保存，查询默认不显示
             for course in courses:
                 course.teacher = ""
             if not self._store_location():
                 for course in courses:
                     course.location = ""
-            tt.name = str(payload.get("name") or tt.name or "我的课表")
-            tt.owner_name = str(payload.get("owner_name") or tt.owner_name)
-            tt.term_start = monday_of(term).isoformat()
-            tt.total_weeks = total_weeks
-            tt.timezone = str(payload.get("timezone") or tt.timezone or self._tz)
-            tt.source = str(payload.get("source") or tt.source or "控制面板")
             tt.courses = courses
             tt.invalidate_index()
 
@@ -3264,51 +3331,10 @@ class ScheduleLitePlugin(Star):
                 tt.adjustments = self._clean_adjustments(payload.get("adjustments"))
             if "makeup_days" in payload:
                 tt.makeup_days = self._clean_makeup_days(payload.get("makeup_days"))
-            if "groups" in payload:
-                tt.groups, _ = self._clean_groups(payload.get("groups"))
-            if "group_origins" in payload:
-                raw_origins = payload.get("group_origins")
-                tt.group_origins = {
-                    str(group): str(origin)
-                    for group, origin in (
-                        raw_origins.items() if isinstance(raw_origins, dict) else []
-                    )
-                    if str(group).strip() and str(origin).strip()
-                }
-                if tt.groups:
-                    tt.group_origins = {
-                        group: origin
-                        for group, origin in tt.group_origins.items()
-                        if group in tt.groups
-                    }
-            if "groups" in payload:
-                tt.group_origins = {
-                    group: origin
-                    for group, origin in tt.group_origins.items()
-                    if group in tt.groups
-                }
-
-            for raw in payload.get("new_adjustments") or []:
-                if not isinstance(raw, dict):
-                    continue
-                source = parse_date(raw.get("from_date")) or self._parse_cmd_date(
-                    str(raw.get("from_date") or ""), self._now().date()
-                )
-                target = parse_date(raw.get("to_date")) or self._parse_cmd_date(
-                    str(raw.get("to_date") or ""), self._now().date()
-                )
-                if source is None or target is None:
-                    return self._err("调课日期格式不对")
-                try:
-                    self._add_adjustment(
-                        tt,
-                        source,
-                        target,
-                        str(raw.get("course") or "").strip(),
-                        bool(raw.get("swap")),
-                    )
-                except ValueError as exc:
-                    return self._err(str(exc))
+            self._api_group_bindings(tt, payload)
+            error = self._api_new_adjustments(tt, payload)
+            if error:
+                return self._err(error)
 
             self.store.put(key, tt)
             await self._save()

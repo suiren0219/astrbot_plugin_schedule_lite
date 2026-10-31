@@ -2,6 +2,19 @@
 
 所有显著变更记录在此。格式参考 Keep a Changelog，版本遵循语义化版本。
 
+## v1.5.18 - 2026-11-01
+
+### 重构
+
+- 拆分 `_check_scheduled_broadcasts`（圈复杂度 70 → 调度器 5）：三个定时节目
+  独立成 `_run_early_push` / `_run_showcase` / `_run_recap`，到点判断收进
+  `_in_broadcast_window`，群会话过滤收进 `_broadcast_origins`
+- 拆分 `_api_timetable_save`（66 → 20 出头）：身份校验、基础字段、群绑定、
+  新增调课分别抽成 `_api_identity` / `_api_base_fields` / `_api_group_bindings` /
+  `_api_new_adjustments`，错误文案与保存行为不变
+- 重构后 151 个测试全部通过；项目平均圈复杂度 7.9 → 7.7，F 级函数 7 → 5
+  （剩余为 ICS 规则展开与子命令路由等固有复杂度）
+
 ## v1.5.17 - 2026-10-31
 
 ### 修复
