@@ -393,6 +393,47 @@ def test_rank_shows_my_position():
     assert "你当前排第 13 名" in long_text
 
 
+def test_rank_reverse_order_and_label():
+    from datetime import datetime
+
+    from schedule_lite_core.model import Course
+
+    def make(uid, name, hours):
+        end = 8 + hours
+        tt = make_timetable()
+        tt.owner_id = uid
+        tt.owner_name = name
+        tt.courses = [
+            Course(
+                name="课", day=1, weeks=[1],
+                start="08:00", end=f"{int(end):02d}:{int(end % 1 * 60):02d}",
+            )
+        ]
+        tt.invalidate_index()
+        return tt
+
+    people = [
+        make("u1", "班长", 10),
+        make("u2", "学委", 6),
+        make("u3", "张三", 3),
+        make("u4", "摸鱼王", 1),
+    ]
+    now = datetime(2026, 9, 8, 12, tzinfo=TZ)
+    text = format_rank(
+        people, "week", now, title="本周榜（倒数）",
+        highlight_owner="u3", reverse=True,
+    )
+    lines = [line for line in text.splitlines() if line.startswith("#")]
+    assert lines[0].endswith("摸鱼王") and "1.0小时" in lines[0]
+    assert lines[-1].endswith("班长") and "10.0小时" in lines[-1]
+    assert "倒数第 2 名" in text
+
+    # 默认仍是正序，不受影响
+    normal = format_rank(people, "week", now, highlight_owner="u3")
+    assert normal.splitlines()[1].endswith("班长")
+    assert "倒数" not in normal
+
+
 def test_everyone_priority_and_hide_idle():
     from datetime import date
 

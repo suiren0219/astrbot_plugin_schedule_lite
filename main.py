@@ -238,7 +238,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.18",
+    "v1.5.19",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1391,11 +1391,16 @@ class ScheduleLitePlugin(Star):
 
         mode = "week"
         full = False
+        reverse = False
         for token in re.split(r"\s+", args.strip()):
             if not token:
                 continue
             if token in ("全部", "all", "所有人"):
                 full = True
+            elif token in ("倒数", "倒序", "反序", "最少", "reverse", "asc", "bottom"):
+                reverse = True
+            elif token in ("正序", "降序", "最多", "top", "desc"):
+                reverse = False
             elif token in RANK_MODES:
                 mode = RANK_MODES[token]
 
@@ -1412,9 +1417,10 @@ class ScheduleLitePlugin(Star):
                 mode,
                 self._now(),
                 full=full,
-                title=f"本群{mode_label}课程时长榜",
+                title=f"本群{mode_label}课程时长榜" + ("（倒数）" if reverse else ""),
                 holiday=self._calendar_for(self._now().date()),
                 highlight_owner=tt.owner_id if tt else "",
+                reverse=reverse,
             )
         )
 
