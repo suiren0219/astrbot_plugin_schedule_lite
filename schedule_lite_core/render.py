@@ -418,21 +418,25 @@ def _new_page(
     height: int,
     background: str = "",
     background_dim: int = 55,
-) -> tuple[Any, Any]:
-    """创建画布；给了背景图就铺图并加白色蒙层（dim 越大背景越淡）。"""
+) -> tuple[Any, Any, Any]:
+    """创建画布，返回 (底图, 覆盖层, draw)。
+
+    半透明色必须画在独立覆盖层上再合并，PIL 的 draw 直接写像素不会与背景混合。
+    """
     size = (_s(width), _s(height))
     bg = _load_background(background, width, height)
     if bg is None:
-        image = Image.new("RGBA", size, "#FFFFFF")
-        return image, ImageDraw.Draw(image)
-    image = bg.convert("RGBA")
-    try:
-        dim = max(0, min(int(background_dim), 90))
-    except (TypeError, ValueError):
-        dim = 55
-    veil = Image.new("RGBA", size, (255, 255, 255, int(dim / 100 * 235)))
-    image = Image.alpha_composite(image, veil)
-    return image, ImageDraw.Draw(image)
+        base = Image.new("RGBA", size, "#FFFFFF")
+    else:
+        base = bg.convert("RGBA")
+        try:
+            dim = max(0, min(int(background_dim), 90))
+        except (TypeError, ValueError):
+            dim = 55
+        veil = Image.new("RGBA", size, (255, 255, 255, int(dim / 100 * 235)))
+        base = Image.alpha_composite(base, veil)
+    overlay = Image.new("RGBA", size, (0, 0, 0, 0))
+    return base, overlay, ImageDraw.Draw(overlay)
 
 
 def _draw_page_frame(
@@ -501,17 +505,17 @@ def render_help(
     content_width = _s(width - margin * 2)
     items = _build_items(markdown, content_width, regular, bold)
 
-    pages: list[tuple[Any, Any]] = []
-    image, draw = _new_page(width, height)
-    pages.append((image, draw))
+    pages: list[tuple[Any, Any, Any]] = []
+    image, overlay, draw = _new_page(width, height)
+    pages.append((image, overlay, draw))
     y = _s(104)
     bottom = _s(height - 74)
     content_top = y
 
     def new_page():
-        nonlocal image, draw, y
-        image, draw = _new_page(width, height)
-        pages.append((image, draw))
+        nonlocal image, overlay, draw, y
+        image, overlay, draw = _new_page(width, height)
+        pages.append((image, overlay, draw))
         y = content_top
 
     for item in items:
@@ -613,7 +617,7 @@ def render_help(
         y += _s(4)
 
     total = len(pages)
-    for page_no, (page_image, page_draw) in enumerate(pages, start=1):
+    for page_no, (_page_image, _page_overlay, page_draw) in enumerate(pages, start=1):
         _draw_page_frame(
             page_draw,
             width,
@@ -626,9 +630,11 @@ def render_help(
         )
 
     paths: list[Path] = []
-    for page_no, (page_image, _draw) in enumerate(pages, start=1):
+    for page_no, (page_image, page_overlay, _draw) in enumerate(pages, start=1):
         path = out / f"help-{digest}-{page_no}.png"
-        page_image.resize((width, height), Image.LANCZOS).save(path, "PNG", optimize=True)
+        Image.alpha_composite(page_image, page_overlay).convert("RGB").resize(
+            (width, height), Image.LANCZOS
+        ).save(path, "PNG", optimize=True)
         paths.append(path)
 
     manifest.write_text(
@@ -791,7 +797,7 @@ def render_everyone(
                 height += divider_h
             else:
                 height += chip_h + chip_gap
-        image, draw = _new_page(width, height, background, background_dim)
+        image, overlay, draw = _new_page(width, height, background, background_dim)
 
         draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
         head_color = _contrast_text(image, (0, 0, _s(width), _s(150)))
@@ -886,9 +892,9 @@ def render_everyone(
             )
 
         path = day_dir / f"everyone-{stamp}-{page_no}.png"
-        image.convert("RGB").resize((width, height), Image.LANCZOS).save(
-            path, "PNG", optimize=True
-        )
+        Image.alpha_composite(image, overlay).convert("RGB").resize(
+            (width, height), Image.LANCZOS
+        ).save(path, "PNG", optimize=True)
         paths.append(path)
 
     return paths
@@ -910,6 +916,8 @@ def render_day_card(
     title: str = "今日课表",
     subtitle: str = "",
     footer_note: str = "发送 /课表 查看自己的课表",
+    next_note: str = "",
+    empty_text: str = "今天没有课～",
     width: int = 900,
     font_path: str = "",
     background: str = "",
@@ -929,9 +937,10 @@ def render_day_card(
     _prune_day_dirs(out, day_dir.name, keep=3)
 
     row_h, gap, header_h, footer_h = 76, 10, 150, 64
+    note_h = 56 if next_note else 0
     count = max(len(rows), 1)
-    height = header_h + count * (row_h + gap) - gap + footer_h
-    image, draw = _new_page(width, height, background, background_dim)
+    height = header_h + count * (row_h + gap) - gap + note_h + footer_h
+    image, overlay, draw = _new_page(width, height, background, background_dim)
 
     draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
     head_box = (0, 0, _s(width), _s(header_h))
@@ -951,7 +960,7 @@ def render_day_card(
     if not rows:
         draw.text(
             (_s(52), y + _s(12)),
-            "今天没有课～",
+            empty_text,
             font=_font(regular, _s(22)),
             fill="#64748B",
         )
@@ -997,6 +1006,20 @@ def render_day_card(
             draw.text((chip_x + _s(13), y + _s(27)), marks, font=chip_font, fill=fg)
         y += _s(row_h + gap)
 
+    if next_note:
+        draw.rounded_rectangle(
+            (_s(28), y, _s(width - 28), y + _s(48)),
+            radius=_s(14),
+            fill=(37, 99, 235, 30),
+        )
+        draw.text(
+            (_s(48), y + _s(12)),
+            _ellipsize(draw, next_note, _font(bold, _s(19)), _s(width - 120)),
+            font=_font(bold, _s(19)),
+            fill="#1D4ED8",
+        )
+        y += _s(note_h)
+
     draw.line(
         (_s(48), _s(height - 52), _s(width - 48), _s(height - 52)),
         fill=(226, 232, 240, 255),
@@ -1011,7 +1034,7 @@ def render_day_card(
     )
 
     path = day_dir / f"day-{time.strftime('%Y%m%d%H%M%S')}.png"
-    image.convert("RGB").resize((width, height), Image.LANCZOS).save(
-        path, "PNG", optimize=True
-    )
+    Image.alpha_composite(image, overlay).convert("RGB").resize(
+        (width, height), Image.LANCZOS
+    ).save(path, "PNG", optimize=True)
     return [path]

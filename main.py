@@ -246,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.22",
+    "v1.5.23",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1245,8 +1245,17 @@ class ScheduleLitePlugin(Star):
             return
 
         now_min = self._query_half(target_date)
+        today = self._now().date()
+        now = self._now()
+        hint = ""
+        if not label and target_date == today:
+            current_min = now.hour * 60 + now.minute
+            if self._today_classes_done(tt, today, current_min):
+                hint = self._tomorrow_hint(tt, today)
         # 优先发图片卡片（长课表容易刷屏），关掉开关或生成失败时退回文字
-        paths = self._render_day_card(tt, target_date, label=label, now_min=now_min)
+        paths = self._render_day_card(
+            tt, target_date, label=label, now_min=now_min, next_note=hint
+        )
         if paths and await self._send_image_pages(event, paths, title="课表"):
             return
         text = format_day(
@@ -1259,6 +1268,8 @@ class ScheduleLitePlugin(Star):
             holiday=self._calendar_for(target_date),
             now_min=now_min,
         )
+        if hint:
+            text += "\n\n🌅 " + hint
         if tt.term_guessed and not label:
             text += (
                 "\n\n📅 这份课表的开学日期是按导入当天推算的。"
@@ -2187,22 +2198,57 @@ class ScheduleLitePlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] 课表图片生成失败: {e}")
             return []
 
+    def _today_classes_done(self, tt: Timetable, today: date, now_min: int) -> bool:
+        """今天是否已经没有课：当天没课，或最后一节已经上完。"""
+        items = day_entries(tt, today, self._calendar_for(today))
+        if not items:
+            return True
+        last_end = max((minutes_of(item.end) or 0) for item in items)
+        return now_min >= last_end
+
+    def _tomorrow_hint(self, tt: Timetable, today: date) -> str:
+        """今天的课上完后，直接预告明天的第一节课（早八）。"""
+        tomorrow = today + timedelta(days=1)
+        calendar = self._calendar_for(tomorrow)
+        if calendar is not None and calendar.is_off(tomorrow):
+            name = calendar.label(tomorrow) or "法定假日"
+            return f"明天放假（{name}），不用早起～"
+        items = day_entries(tt, tomorrow, calendar)
+        if not items:
+            return "明天没有课，可以睡到自然醒～"
+        first = items[0]
+        max_start = minutes_of(str(self._cfg("early_max_start", "08:00") or "08:00")) or 480
+        label = "明天早八" if (minutes_of(first.start) or 1440) <= max_start else "明天第一节课"
+        return f"{label}：{first.start}-{first.end} {first.course.name}"
+
     def _render_day_card(
-        self, tt: Timetable, d: date, *, label: str = "", now_min: int | None = None
+        self,
+        tt: Timetable,
+        d: date,
+        *,
+        label: str = "",
+        now_min: int | None = None,
+        next_note: str = "",
     ):
         """把单日课表渲染成图片；没有课程或当前时段已无课时返回空，交给文字兜底。"""
         if not self._image_enabled("query_image"):
             return []
         calendar = self._calendar_for(d)
-        items = day_entries(tt, d, calendar)
-        if not items:
-            return []
+        all_items = day_entries(tt, d, calendar)
+        empty_text = ""
         half_note = ""
-        if now_min is not None:
-            items, half, finished_note, _other = scope_day_half(items, now_min)
+        items = all_items
+        if not all_items:
+            if not next_note:
+                return []
+            empty_text = "今天没有课～"
+        elif now_min is not None:
+            items, half, finished_note, _other = scope_day_half(all_items, now_min)
             if finished_note:
-                return []  # 「上午已经上完」这种就该用一句文字说
-            if len(items) < len(day_entries(tt, d, calendar)):
+                if not next_note:
+                    return []  # 只有一句话时交给文字说
+                items, empty_text = [], finished_note
+            elif len(items) < len(all_items):
                 half_note = f" · 仅{half_label(half)}"
         rows = []
         leave = tt.leave_on(d)
@@ -2245,6 +2291,8 @@ class ScheduleLitePlugin(Star):
                 title=f"{label or '今日'}课表" if label else "今日课表",
                 subtitle=subtitle,
                 footer_note=footer,
+                next_note=next_note,
+                empty_text=empty_text or "今天没有课～",
                 width=self._image_width(),
                 font_path=self._font_path(),
                 background=self._image_background(),
