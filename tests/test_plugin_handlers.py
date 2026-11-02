@@ -233,7 +233,9 @@ def plugin(tmp_path):
     import main as plugin_main
 
     plugin_main.StarTools._dir = tmp_path
-    return plugin_main.ScheduleLitePlugin(None, {"everyone_image": False, "help_image": False})
+    return plugin_main.ScheduleLitePlugin(
+        None, {"everyone_image": False, "help_image": False, "query_image": False}
+    )
 
 
 @pytest.fixture()
@@ -1242,6 +1244,87 @@ def test_rank_month_label(plugin):
     _import_sample(plugin, event)
     out = asyncio.run(_collect(plugin._h_rank(event, "本月 全部")))
     assert "本月" in out[0]
+
+
+def test_query_sends_day_card(image_plugin, tmp_path):
+    """开启 query_image 时 /课表 发卡片，不再刷一长串文字。"""
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    event = _Event("/课表 导入")
+    asyncio.run(_collect(image_plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    out = asyncio.run(_collect(image_plugin._h_query(event, "2026/9/8")))
+    assert out == [], "图片发送成功时不应再发文字"
+    assert event.sent
+    day_dirs = list((tmp_path / "cache" / "day").glob("*/day-*.png"))
+    assert day_dirs
+
+
+def test_query_falls_back_to_text(plugin):
+    """关闭开关时保持原来的文字查询。"""
+    event = _Event("/课表 导入")
+    _import_sample(plugin, event)
+    out = asyncio.run(_collect(plugin._h_query(event, "2026/9/8")))
+    assert out and "第 1 周" in out[0]
+
+
+def test_day_card_skips_without_courses(image_plugin):
+    """没课的日子交给文字说「今天没有课」更合适，不生成空卡片。"""
+    event = _Event("/课表 导入")
+    asyncio.run(_collect(image_plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    tt = image_plugin.store.get(image_plugin._user_key(event))
+    # 拾光样例只有周二、周四有课，周三应当是空的
+    assert image_plugin._render_day_card(tt, __import__("datetime").date(2026, 9, 9)) == []
+
+
+def test_background_upload_and_clear(image_plugin, tmp_path):
+    import base64
+    import io
+
+    from PIL import Image
+
+    from astrbot.api import web
+
+    buffer = io.BytesIO()
+    Image.new("RGB", (64, 48), (10, 120, 200)).save(buffer, "PNG")
+    payload = {
+        "data": "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode(),
+        "name": "bg.png",
+    }
+    web.request.body = payload
+    result = asyncio.run(image_plugin._api_background())
+    assert result.get("status") == "ok"
+    rel = result["data"]["path"]
+    assert rel.endswith("background.png")
+    assert (tmp_path / rel).is_file()
+    assert image_plugin._image_background().endswith("background.png")
+
+    web.request.body = {"clear": True}
+    cleared = asyncio.run(image_plugin._api_background())
+    assert cleared.get("status") == "ok"
+    assert image_plugin._image_background() == ""
+
+
+def test_render_day_card_with_background(tmp_path):
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    from PIL import Image
+
+    bg = tmp_path / "bg.png"
+    Image.new("RGB", (800, 600), (30, 60, 120)).save(bg, "PNG")
+    paths = render.render_day_card(
+        [{"time": "08:00-09:40", "name": "高等数学", "place": "A101", "marks": "", "mark_kind": ""}],
+        tmp_path / "out",
+        title="今日课表",
+        subtitle="测试",
+        background=str(bg),
+        background_dim=40,
+    )
+    assert len(paths) == 1 and paths[0].is_file()
 
 
 def test_rank_sends_image(image_plugin, tmp_path):
