@@ -344,7 +344,8 @@
     if (path === "timetable") return { ...blankRecord(), key: (body && body.key) || "" };
     if (path === "settings") {
       return {
-        store_location: true, show_location: false, everyone_image: true, avatar_enabled: true, help_image: true,
+        store_location: true, show_location: false, query_image: true, everyone_image: true, avatar_enabled: true,
+        image_background: "", image_background_dim: 55, help_image: true,
         everyone_page_size: 8, everyone_hide_idle_over: 12, everyone_active_days: 3,
         showcase_enabled: false, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
@@ -364,6 +365,7 @@
     if (path === "events") return { items: [] };
     if (path === "events/save") throw new Error("未连接 AstrBot 后台，重要日期不会保存");
     if (path === "settings/save") throw new Error("未连接 AstrBot 后台，设置不会保存");
+    if (path === "background") throw new Error("未连接 AstrBot 后台，无法上传背景图");
     if (path === "holidays/refresh") throw new Error("未连接 AstrBot 后台，无法刷新节假日");
     return {};
   }
@@ -1086,7 +1088,10 @@
       };
       set("#set-store-location", "store_location");
       set("#set-show-location", "show_location");
+      set("#set-query-image", "query_image");
       set("#set-everyone-image", "everyone_image");
+      set("#set-bg-dim", "image_background_dim");
+      renderBackgroundState(data.image_background || "");
       set("#set-avatar", "avatar_enabled");
       set("#set-help-image", "help_image");
       set("#set-hide-idle", "everyone_hide_idle_over");
@@ -1168,6 +1173,44 @@
     $("#scope-status").textContent = `${label} · ${detail}`;
   }
 
+  function renderBackgroundState(path) {
+    const el = $("#bg-state");
+    if (!el) return;
+    el.textContent = path ? `当前：${path}` : "未设置（纯白背景）";
+  }
+
+  async function uploadBackground(file) {
+    if (!file) return;
+    if (file.size > 8 * 1024 * 1024) {
+      toast("图片太大，请控制在 8 MB 以内");
+      return;
+    }
+    const data = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result || ""));
+      reader.onerror = () => reject(new Error("读取图片失败"));
+      reader.readAsDataURL(file);
+    });
+    try {
+      const res = await apiPost("background", { data, name: file.name });
+      renderBackgroundState(res.path || "");
+      toast("背景图已保存");
+      loadOverview();
+    } catch (err) {
+      toast(`背景图保存失败：${err.message}`);
+    }
+  }
+
+  async function clearBackground() {
+    try {
+      await apiPost("background", { clear: true });
+      renderBackgroundState("");
+      toast("已清除背景图");
+    } catch (err) {
+      toast(`清除失败：${err.message}`);
+    }
+  }
+
   async function saveSettings() {
     const num = (id) => {
       const n = Number($(id).value);
@@ -1176,7 +1219,9 @@
     const payload = {
       store_location: $("#set-store-location").checked,
       show_location: $("#set-show-location").checked,
+      query_image: $("#set-query-image").checked,
       everyone_image: $("#set-everyone-image").checked,
+      image_background_dim: num("#set-bg-dim"),
       avatar_enabled: $("#set-avatar").checked,
       help_image: $("#set-help-image").checked,
       everyone_hide_idle_over: num("#set-hide-idle"),
@@ -1364,6 +1409,13 @@
   });
   $("#refresh-holiday").addEventListener("click", refreshHoliday);
   $("#save-settings").addEventListener("click", saveSettings);
+  $("#bg-pick")?.addEventListener("click", () => $("#bg-file").click());
+  $("#bg-file")?.addEventListener("change", (event) => {
+    const file = event.target.files && event.target.files[0];
+    event.target.value = "";
+    uploadBackground(file);
+  });
+  $("#bg-clear")?.addEventListener("click", clearBackground);
   ["#set-scope-mode", "#set-scope-list"].forEach((sel) => {
     $(sel).addEventListener("input", updateScopeStatus);
     $(sel).addEventListener("change", updateScopeStatus);

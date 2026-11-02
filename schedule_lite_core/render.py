@@ -380,8 +380,58 @@ def _draw_lines(
     return y
 
 
-def _new_page(width: int, height: int) -> tuple[Any, Any]:
-    image = Image.new("RGB", (_s(width), _s(height)), "#FFFFFF")
+def _load_background(path: str, width: int, height: int) -> Any | None:
+    """把背景图裁成卡片尺寸（cover 裁切），读不到就返回 None。"""
+    if not path:
+        return None
+    try:
+        with Image.open(path) as source:
+            bg = source.convert("RGB")
+    except Exception:  # noqa: BLE001
+        return None
+    target_w, target_h = _s(width), _s(height)
+    if bg.width <= 0 or bg.height <= 0:
+        return None
+    ratio = max(target_w / bg.width, target_h / bg.height)
+    bg = bg.resize(
+        (max(1, int(bg.width * ratio)), max(1, int(bg.height * ratio))),
+        Image.LANCZOS,
+    )
+    left = max((bg.width - target_w) // 2, 0)
+    top = max((bg.height - target_h) // 2, 0)
+    return bg.crop((left, top, left + target_w, top + target_h))
+
+
+def _contrast_text(image: Any, box: tuple[int, int, int, int], dark: str = "#0F172A", light: str = "#FFFFFF") -> str:
+    """按区域平均亮度挑文字颜色，自定义背景图偏暗时用白字。"""
+    try:
+        region = image.crop(box).convert("L").resize((24, 8))
+        values = list(region.getdata())
+        mean = sum(values) / max(len(values), 1)
+    except Exception:  # noqa: BLE001
+        return dark
+    return dark if mean >= 160 else light
+
+
+def _new_page(
+    width: int,
+    height: int,
+    background: str = "",
+    background_dim: int = 55,
+) -> tuple[Any, Any]:
+    """创建画布；给了背景图就铺图并加白色蒙层（dim 越大背景越淡）。"""
+    size = (_s(width), _s(height))
+    bg = _load_background(background, width, height)
+    if bg is None:
+        image = Image.new("RGBA", size, "#FFFFFF")
+        return image, ImageDraw.Draw(image)
+    image = bg.convert("RGBA")
+    try:
+        dim = max(0, min(int(background_dim), 90))
+    except (TypeError, ValueError):
+        dim = 55
+    veil = Image.new("RGBA", size, (255, 255, 255, int(dim / 100 * 235)))
+    image = Image.alpha_composite(image, veil)
     return image, ImageDraw.Draw(image)
 
 
@@ -688,6 +738,8 @@ def render_everyone(
     page_size: int = 8,
     width: int = 900,
     font_path: str = "",
+    background: str = "",
+    background_dim: int = 55,
 ) -> list[Path]:
     if not available(font_path):
         return []
@@ -739,13 +791,16 @@ def render_everyone(
                 height += divider_h
             else:
                 height += chip_h + chip_gap
-        image, draw = _new_page(width, height)
+        image, draw = _new_page(width, height, background, background_dim)
 
         draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
-        draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill="#2563EB")
-        draw.text((_s(48), _s(58)), title, font=_font(bold, _s(36)), fill="#0F172A")
+        head_color = _contrast_text(image, (0, 0, _s(width), _s(150)))
+        sub_color = "#64748B" if head_color == "#0F172A" else "#E2E8F0"
+        brand_color = "#2563EB" if head_color == "#0F172A" else "#BFDBFE"
+        draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
+        draw.text((_s(48), _s(58)), title, font=_font(bold, _s(36)), fill=head_color)
         if subtitle:
-            draw.text((_s(48), _s(108)), subtitle, font=_font(regular, _s(18)), fill="#64748B")
+            draw.text((_s(48), _s(108)), subtitle, font=_font(regular, _s(18)), fill=sub_color)
 
         y = _s(150)
         for kind, payload, _cost in chunk:
@@ -756,8 +811,8 @@ def render_everyone(
                 draw.rounded_rectangle(
                     (_s(28), y, _s(width - 28), y + _s(row_h)),
                     radius=_s(16),
-                    fill="#F8FAFC",
-                    outline="#E2E8F0",
+                    fill=(248, 250, 252, 238),
+                    outline=(226, 232, 240, 255),
                     width=_s(1),
                 )
                 cx, cy = _s(76), y + _s(row_h // 2)
@@ -794,8 +849,8 @@ def render_everyone(
                     draw.rounded_rectangle(
                         (_s(x), y, _s(x + chip_w), y + _s(chip_h)),
                         radius=_s(12),
-                        fill="#F8FAFC",
-                        outline="#E2E8F0",
+                        fill=(248, 250, 252, 238),
+                        outline=(226, 232, 240, 255),
                         width=_s(1),
                     )
                     _draw_avatar(
@@ -818,7 +873,8 @@ def render_everyone(
             fill="#E2E8F0",
             width=_s(1),
         )
-        draw.text((_s(48), _s(height - 40)), footer_note, font=_font(regular, _s(14)), fill="#94A3B8")
+        footer_color = _contrast_text(image, (0, _s(height - 64), _s(width), _s(height)), "#94A3B8", "#E2E8F0")
+        draw.text((_s(48), _s(height - 40)), footer_note, font=_font(regular, _s(14)), fill=footer_color)
         if len(pages) > 1:
             label = f"{page_no} / {len(pages)}"
             page_font = _font(bold, _s(14))
@@ -826,11 +882,136 @@ def render_everyone(
                 (_s(width - 48) - page_font.getlength(label), _s(height - 40)),
                 label,
                 font=page_font,
-                fill="#94A3B8",
+                fill=footer_color,
             )
 
         path = day_dir / f"everyone-{stamp}-{page_no}.png"
-        image.resize((width, height), Image.LANCZOS).save(path, "PNG", optimize=True)
+        image.convert("RGB").resize((width, height), Image.LANCZOS).save(
+            path, "PNG", optimize=True
+        )
         paths.append(path)
 
     return paths
+
+
+# ---------------------------------------------------------------- 单日课表卡片
+
+MARK_STYLE = {
+    "skip": ("#B45309", "#FEF3C7"),   # 翘课
+    "leave": ("#1D4ED8", "#DBEAFE"),  # 请假
+    "moved": ("#6D28D9", "#EDE9FE"),  # 调课
+}
+
+
+def render_day_card(
+    rows: Sequence[dict],
+    out_dir: str | Path,
+    *,
+    title: str = "今日课表",
+    subtitle: str = "",
+    footer_note: str = "发送 /课表 查看自己的课表",
+    width: int = 900,
+    font_path: str = "",
+    background: str = "",
+    background_dim: int = 55,
+) -> list[Path]:
+    """渲染单日课表卡片。
+
+    rows: [{"time": "08:00-09:40", "name": "高等数学", "place": "松1-303",
+            "marks": "翘课", "mark_kind": "skip"}]
+    """
+    if not available(font_path):
+        return []
+    regular, bold = _font_pair(font_path)
+    out = Path(out_dir)
+    day_dir = out / time.strftime("%Y%m%d")
+    day_dir.mkdir(parents=True, exist_ok=True)
+    _prune_day_dirs(out, day_dir.name, keep=3)
+
+    row_h, gap, header_h, footer_h = 76, 10, 150, 64
+    count = max(len(rows), 1)
+    height = header_h + count * (row_h + gap) - gap + footer_h
+    image, draw = _new_page(width, height, background, background_dim)
+
+    draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
+    head_box = (0, 0, _s(width), _s(header_h))
+    title_color = _contrast_text(image, head_box)
+    sub_color = (
+        "#64748B"
+        if title_color == "#0F172A"
+        else "#E2E8F0"
+    )
+    brand_color = "#2563EB" if title_color == "#0F172A" else "#BFDBFE"
+    draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
+    draw.text((_s(48), _s(58)), title, font=_font(bold, _s(36)), fill=title_color)
+    if subtitle:
+        draw.text((_s(48), _s(108)), subtitle, font=_font(regular, _s(18)), fill=sub_color)
+
+    y = _s(header_h)
+    if not rows:
+        draw.text(
+            (_s(52), y + _s(12)),
+            "今天没有课～",
+            font=_font(regular, _s(22)),
+            fill="#64748B",
+        )
+        y += _s(row_h + gap)
+    for row in rows:
+        draw.rounded_rectangle(
+            (_s(28), y, _s(width - 28), y + _s(row_h)),
+            radius=_s(16),
+            fill=(248, 250, 252, 238),
+            outline=(226, 232, 240, 255),
+            width=_s(1),
+        )
+        time_text = str(row.get("time") or "")
+        draw.text(
+            (_s(52), y + _s(16)),
+            time_text,
+            font=_font(bold, _s(19)),
+            fill="#475569",
+        )
+        name = _ellipsize(
+            draw,
+            str(row.get("name") or ""),
+            _font(bold, _s(23)),
+            _s(width - 420),
+        )
+        draw.text((_s(250), y + _s(13)), name, font=_font(bold, _s(23)), fill="#0F172A")
+        place = str(row.get("place") or "")
+        if place:
+            place = _ellipsize(draw, place, _font(regular, _s(15)), _s(width - 300))
+            draw.text((_s(250), y + _s(45)), place, font=_font(regular, _s(15)), fill="#94A3B8")
+
+        marks = str(row.get("marks") or "")
+        if marks:
+            fg, bg = MARK_STYLE.get(str(row.get("mark_kind") or ""), ("#475569", "#E2E8F0"))
+            chip_font = _font(bold, _s(16))
+            chip_w = chip_font.getlength(marks) + _s(26)
+            chip_x = _s(width - 44) - chip_w
+            draw.rounded_rectangle(
+                (chip_x, y + _s(22), chip_x + chip_w, y + _s(22) + _s(32)),
+                radius=_s(16),
+                fill=bg,
+            )
+            draw.text((chip_x + _s(13), y + _s(27)), marks, font=chip_font, fill=fg)
+        y += _s(row_h + gap)
+
+    draw.line(
+        (_s(48), _s(height - 52), _s(width - 48), _s(height - 52)),
+        fill=(226, 232, 240, 255),
+        width=_s(1),
+    )
+    footer_color = _contrast_text(image, (0, _s(height - footer_h), _s(width), _s(height)), "#94A3B8", "#E2E8F0")
+    draw.text(
+        (_s(48), _s(height - 40)),
+        footer_note,
+        font=_font(regular, _s(14)),
+        fill=footer_color,
+    )
+
+    path = day_dir / f"day-{time.strftime('%Y%m%d%H%M%S')}.png"
+    image.convert("RGB").resize((width, height), Image.LANCZOS).save(
+        path, "PNG", optimize=True
+    )
+    return [path]

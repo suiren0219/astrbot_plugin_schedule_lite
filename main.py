@@ -80,12 +80,15 @@ try:
         everyone_report,
         format_day,
         format_rank,
+        half_label,
         rank_rows,
         is_abandoned,
         parse_query_date,
+        scope_day_half,
         status_now,
         timetables_of_group,
         weekday_cn,
+        week_state,
     )
     from .schedule_lite_core.storage import TimetableStore
 except ImportError:  # pragma: no cover - AstrBot 以脚本方式加载时
@@ -120,12 +123,15 @@ except ImportError:  # pragma: no cover - AstrBot 以脚本方式加载时
         everyone_report,
         format_day,
         format_rank,
+        half_label,
         rank_rows,
         is_abandoned,
         parse_query_date,
+        scope_day_half,
         status_now,
         timetables_of_group,
         weekday_cn,
+        week_state,
     )
     from schedule_lite_core.storage import TimetableStore
 
@@ -240,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.21",
+    "v1.5.22",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1238,6 +1244,11 @@ class ScheduleLitePlugin(Star):
             )
             return
 
+        now_min = self._query_half(target_date)
+        # 优先发图片卡片（长课表容易刷屏），关掉开关或生成失败时退回文字
+        paths = self._render_day_card(tt, target_date, label=label, now_min=now_min)
+        if paths and await self._send_image_pages(event, paths, title="课表"):
+            return
         text = format_day(
             tt,
             target_date,
@@ -1246,7 +1257,7 @@ class ScheduleLitePlugin(Star):
             show_location=self._show_location(),
             today=self._now().date(),
             holiday=self._calendar_for(target_date),
-            now_min=self._query_half(target_date),
+            now_min=now_min,
         )
         if tt.term_guessed and not label:
             text += (
@@ -2139,6 +2150,22 @@ class ScheduleLitePlugin(Star):
     def _image_enabled(self, key: str) -> bool:
         return bool(self._cfg(key, True)) and render_mod.available(self._font_path())
 
+    def _image_background(self) -> str:
+        """解析卡片背景图路径：支持绝对路径，也接受数据目录内的相对路径。"""
+        raw = str(self._cfg("image_background", "") or "").strip()
+        if not raw:
+            return ""
+        path = Path(raw)
+        if not path.is_absolute():
+            path = self._plugin_data_dir() / raw
+        return str(path) if path.is_file() else ""
+
+    def _background_dim(self) -> int:
+        try:
+            return max(0, min(int(self._cfg("image_background_dim", 55)), 90))
+        except (TypeError, ValueError):
+            return 55
+
     def _render_everyone(
         self, entries, *, title: str, subtitle: str, footer_note: str = ""
     ):
@@ -2153,9 +2180,78 @@ class ScheduleLitePlugin(Star):
                 page_size=self._everyone_page_size(),
                 width=self._image_width(),
                 font_path=self._font_path(),
+                background=self._image_background(),
+                background_dim=self._background_dim(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 课表图片生成失败: {e}")
+            return []
+
+    def _render_day_card(
+        self, tt: Timetable, d: date, *, label: str = "", now_min: int | None = None
+    ):
+        """把单日课表渲染成图片；没有课程或当前时段已无课时返回空，交给文字兜底。"""
+        if not self._image_enabled("query_image"):
+            return []
+        calendar = self._calendar_for(d)
+        items = day_entries(tt, d, calendar)
+        if not items:
+            return []
+        half_note = ""
+        if now_min is not None:
+            items, half, finished_note, _other = scope_day_half(items, now_min)
+            if finished_note:
+                return []  # 「上午已经上完」这种就该用一句文字说
+            if len(items) < len(day_entries(tt, d, calendar)):
+                half_note = f" · 仅{half_label(half)}"
+        rows = []
+        leave = tt.leave_on(d)
+        for item in items:
+            marks = []
+            kind = ""
+            if item.moved:
+                marks.append("调课")
+                kind = "moved"
+            if leave:
+                marks.append("请假")
+                kind = "leave"
+            if is_abandoned(tt, item.course, item.start, d):
+                marks.append("翘课")
+                kind = "skip"
+            rows.append(
+                {
+                    "time": f"{item.start}-{item.end}",
+                    "name": item.course.name,
+                    "place": item.course.location if self._show_location() else "",
+                    "marks": " · ".join(marks),
+                    "mark_kind": kind,
+                }
+            )
+        week, state = week_state(tt, d)
+        subtitle = f"{d:%Y/%m/%d} {weekday_cn(d)}"
+        if state == "during":
+            subtitle += f" · 第 {week} 周"
+        if label:
+            subtitle = f"{label} · {subtitle}"
+        subtitle += half_note
+        footer = "发送 /课表 查看自己的课表"
+        if tt.term_guessed:
+            footer = "开学日期按导入当天推算，发 /课表 学期 2026-09-07 可修正"
+        try:
+            cache_dir = self._plugin_data_dir() / "cache" / "day"
+            return render_mod.render_day_card(
+                rows,
+                cache_dir,
+                title=f"{label or '今日'}课表" if label else "今日课表",
+                subtitle=subtitle,
+                footer_note=footer,
+                width=self._image_width(),
+                font_path=self._font_path(),
+                background=self._image_background(),
+                background_dim=self._background_dim(),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 课表卡片生成失败: {e}")
             return []
 
     async def _send_image_pages(self, event, paths, *, title: str = "课表 Lite") -> bool:
@@ -2354,6 +2450,8 @@ class ScheduleLitePlugin(Star):
                 page_size=20,
                 width=self._image_width(),
                 font_path=self._font_path(),
+                background=self._image_background(),
+                background_dim=self._background_dim(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 排行卡片生成失败: {e}")
@@ -2990,6 +3088,7 @@ class ScheduleLitePlugin(Star):
             ("restore", self._api_restore, ["POST"], "恢复备份"),
             ("settings", self._api_settings, ["GET"], "读取设置"),
             ("settings/save", self._api_settings_save, ["POST"], "保存设置"),
+            ("background", self._api_background, ["POST"], "上传/清除卡片背景图"),
             ("holidays", self._api_holidays, ["GET"], "节假日"),
             ("holidays/refresh", self._api_holidays_refresh, ["POST"], "刷新节假日"),
             ("live", self._api_live, ["GET"], "当前状态"),
@@ -3549,6 +3648,9 @@ class ScheduleLitePlugin(Star):
         "show_location",
         "everyone_image",
         "avatar_enabled",
+        "query_image",
+        "image_background",
+        "image_background_dim",
         "help_image",
         "image_width",
         "everyone_page_size",
@@ -3578,6 +3680,15 @@ class ScheduleLitePlugin(Star):
     def _settings_view(self) -> dict:
         return {key: self._cfg(key, None) for key in self._SETTING_KEYS}
 
+    def _set_config_value(self, key: str, value) -> None:
+        try:
+            self.config[key] = value
+        except Exception:  # noqa: BLE001
+            setattr(self.config, key, value)
+        save_config = getattr(self.config, "save_config", None)
+        if callable(save_config):
+            save_config()
+
     async def _api_settings(self):
         try:
             return self._ok(self._settings_view())
@@ -3594,6 +3705,7 @@ class ScheduleLitePlugin(Star):
                 "show_location",
                 "everyone_image",
                 "avatar_enabled",
+                "query_image",
                 "help_image",
                 "showcase_enabled",
                 "recap_enabled",
@@ -3604,6 +3716,7 @@ class ScheduleLitePlugin(Star):
                 "everyone_page_size",
                 "everyone_hide_idle_over",
                 "everyone_active_days",
+                "image_background_dim",
                 "showcase_min_minutes",
                 "showcase_min_users",
                 "recap_weekday",
@@ -3641,6 +3754,53 @@ class ScheduleLitePlugin(Star):
             self._makeup_text = None
             return self._ok(self._settings_view())
         except Exception as exc:  # noqa: BLE001
+            return self._err(str(exc), 500)
+
+    async def _api_background(self):
+        """上传/清除卡片背景图；图片存到数据目录 assets/background.png。"""
+        try:
+            payload = await self._json_body()
+            if not isinstance(payload, dict):
+                return self._err("请求内容不是对象")
+            path = self._plugin_data_dir() / "assets" / "background.png"
+            if payload.get("clear"):
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                self._set_config_value("image_background", "")
+                return self._ok({"cleared": True, "path": ""})
+
+            raw = payload.get("data")
+            if not isinstance(raw, str) or not raw.strip():
+                return self._err("没有收到图片数据")
+            import base64
+
+            try:
+                data = base64.b64decode(raw.split(",", 1)[-1], validate=False)
+            except Exception:  # noqa: BLE001
+                return self._err("图片数据解码失败")
+            if len(data) > 8 * 1024 * 1024:
+                return self._err("图片太大，请控制在 8 MB 以内")
+            from io import BytesIO
+
+            from PIL import Image
+
+            try:
+                with Image.open(BytesIO(data)) as image:
+                    image.load()
+                    image = image.convert("RGB")
+                    if max(image.size) > 2400:
+                        image.thumbnail((2400, 2400), Image.LANCZOS)
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    image.save(path, "PNG", optimize=True)
+            except Exception as exc:  # noqa: BLE001
+                return self._err(f"图片无法识别：{exc}")
+            rel = path.relative_to(self._plugin_data_dir()).as_posix()
+            self._set_config_value("image_background", rel)
+            return self._ok({"path": rel, "size": path.stat().st_size})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"[{PLUGIN_NAME}] 背景图保存失败")
             return self._err(str(exc), 500)
 
     async def _api_holidays(self):

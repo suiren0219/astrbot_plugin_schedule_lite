@@ -131,6 +131,29 @@
     "default": true,
     "hint": "状态卡片优先拉取 QQ 头像并缓存 30 天；非数字用户 ID、无网络或头像失效时自动回退首字母。"
   },
+  "query_image": {
+    "description": "📅 课表查询用图片",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后 /课表、/课表 明天、/课表 @某人 都发图片卡片，避免长课表刷屏；关闭或生成失败时回到文字。"
+  },
+  "image_background": {
+    "description": "🖼️ 卡片背景图",
+    "type": "string",
+    "default": "",
+    "hint": "课表/群友/排行卡片的背景图。绝对路径，或数据目录内的相对路径（控制台上传后会自动填 assets/background.png）。留空为纯白。"
+  },
+  "image_background_dim": {
+    "description": "🎚️ 背景淡化程度",
+    "type": "int",
+    "default": 55,
+    "hint": "越大背景越淡、文字越清楚：0 接近原图，90 几乎纯白。",
+    "slider": {
+      "min": 0,
+      "max": 90,
+      "step": 5
+    }
+  },
   "image_width": {
     "description": "📐 图片宽度（像素）",
     "type": "int",
