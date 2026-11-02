@@ -1262,6 +1262,96 @@ def test_query_sends_day_card(image_plugin, tmp_path):
     assert day_dirs
 
 
+def _force_now(plugin, hour, minute=0):
+    from datetime import datetime, time
+
+    from schedule_lite_core.normalize import get_tz
+
+    today = plugin._now().date()
+    plugin._now = lambda: datetime.combine(
+        today, time(hour, minute), tzinfo=get_tz("Asia/Shanghai")
+    )
+
+
+def _seed_two_day_timetable(plugin, *, tomorrow_start="08:00"):
+    from datetime import timedelta
+
+    from schedule_lite_core.model import Course, Timetable
+
+    today = plugin._now().date()
+    tomorrow = today + timedelta(days=1)
+    weeks = list(range(1, 21))
+    tt = Timetable(
+        owner_id="10001",
+        owner_name="张三",
+        term_start="2026-08-31",
+        total_weeks=20,
+        courses=[
+            Course(name="高等数学", day=today.isoweekday(), weeks=weeks, start="08:00", end="09:40"),
+            Course(
+                name="大学英语", day=tomorrow.isoweekday(), weeks=weeks,
+                start=tomorrow_start, end="09:40",
+            ),
+        ],
+    )
+    plugin.store.put("test:10001", tt)
+    return tt
+
+
+def test_query_after_classes_shows_tomorrow_early(plugin):
+    event = _Event("/课表 导入")
+    _seed_two_day_timetable(plugin)
+    _force_now(plugin, 22)
+    out = asyncio.run(_collect(plugin._h_query(event, "")))
+    assert "明天早八" in out[0]
+    assert "大学英语" in out[0]
+
+
+def test_query_before_classes_has_no_tomorrow_hint(plugin):
+    event = _Event("/课表 导入")
+    _seed_two_day_timetable(plugin)
+    _force_now(plugin, 7)
+    out = asyncio.run(_collect(plugin._h_query(event, "")))
+    assert "明天早八" not in out[0]
+
+
+def test_query_late_when_tomorrow_has_no_class(plugin):
+    from datetime import timedelta
+
+    from schedule_lite_core.model import Course, Timetable
+
+    event = _Event("/课表 导入")
+    today = plugin._now().date()
+    tt = Timetable(
+        owner_id="10001",
+        owner_name="张三",
+        term_start="2026-08-31",
+        total_weeks=20,
+        courses=[
+            Course(name="高等数学", day=today.isoweekday(), weeks=list(range(1, 21)), start="08:00", end="09:40"),
+        ],
+    )
+    plugin.store.put("test:10001", tt)
+    _force_now(plugin, 22)
+    out = asyncio.run(_collect(plugin._h_query(event, "")))
+    assert "明天没有课" in out[0]
+
+
+def test_query_image_gets_tomorrow_hint(image_plugin):
+    event = _Event("/课表 导入")
+    _seed_two_day_timetable(image_plugin)
+    _force_now(image_plugin, 22)
+    captured = {}
+
+    def fake_render(tt, d, *, label="", now_min=None, next_note=""):
+        captured["note"] = next_note
+        return []
+
+    image_plugin._render_day_card = fake_render
+    asyncio.run(_collect(image_plugin._h_query(event, "")))
+    assert "明天早八" in captured.get("note", "")
+
+
 def test_query_falls_back_to_text(plugin):
     """关闭开关时保持原来的文字查询。"""
     event = _Event("/课表 导入")
