@@ -1267,6 +1267,34 @@ def test_rank_sends_image(image_plugin, tmp_path):
     assert day_dirs
 
 
+def test_rank_card_keeps_avatars(image_plugin, tmp_path):
+    """排行卡片要带 QQ 头像：头像路径必须从缓存透传到卡片行。"""
+    from PIL import Image
+
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    avatar_dir = tmp_path / "cache" / "avatars"
+    avatar_dir.mkdir(parents=True)
+    Image.new("RGB", (120, 120), (30, 90, 200)).save(avatar_dir / "10001.png", "PNG")
+
+    event = _Event("/课表 导入", group="g1")
+    asyncio.run(_collect(image_plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    captured = {}
+
+    def fake_render(title, subtitle, rows):
+        captured["title"] = title
+        captured["rows"] = rows
+        return []
+
+    image_plugin._render_rank_card = fake_render
+    asyncio.run(_collect(image_plugin._h_rank(event, "学期")))
+    assert captured["rows"]
+    assert captured["rows"][0]["avatar"].endswith("10001.png")
+
+
 def test_rank_falls_back_to_text(plugin):
     """关闭图片或图片生成失败时，仍然返回原来的文字榜。"""
     event = _Event("/课表 导入", group="g1")

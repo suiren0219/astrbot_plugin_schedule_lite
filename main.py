@@ -240,7 +240,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.20",
+    "v1.5.21",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1436,6 +1436,9 @@ class ScheduleLitePlugin(Star):
             mine = data["mine"]
             label = f"倒数第 {mine['rank']} 名" if reverse else f"第 {mine['rank']} 名"
             subtitle_parts.append(f"你{label} · {mine['shown']} 小时")
+        avatars = await self._avatar_paths(
+            [row["timetable"] for row in data["rows"]]
+        )
         card_rows = []
         for row in data["rows"]:
             owner = row["timetable"].owner_name or row["timetable"].owner_id
@@ -1447,6 +1450,7 @@ class ScheduleLitePlugin(Star):
                     "label": f"#{row['rank']}",
                     "main": f"{row['shown']} 小时",
                     "sub": "",
+                    "avatar": avatars.get(row["timetable"].owner_id, ""),
                 }
             )
         paths = self._render_rank_card(title, " · ".join(subtitle_parts), card_rows)
@@ -2335,6 +2339,7 @@ class ScheduleLitePlugin(Star):
                 "label": row.get("label", ""),
                 "main": row.get("main", ""),
                 "sub": row.get("sub", ""),
+                "avatar": row.get("avatar", ""),
             }
             for row in rows
         ]
