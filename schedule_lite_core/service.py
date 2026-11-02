@@ -608,6 +608,73 @@ def rank_hours(
             total += max((minutes_of(end) or 0) - (minutes_of(start) or 0), 0)
     return total / 60.0
 
+def rank_rows(
+    timetables: Sequence[Timetable],
+    mode: str,
+    now: datetime | None = None,
+    *,
+    full: bool = False,
+    holiday=None,
+    highlight_owner: str = "",
+    reverse: bool = False,
+) -> dict:
+    """算出排行榜的结构化数据，文本与图片共用同一份名次。
+
+    返回 {"mode", "rows", "hidden", "total", "mine", "reverse"}：
+    rows 是裁剪后的展示行，mine 是请求者的完整名次（可能不在 rows 里）。
+    """
+    mode = mode if mode in RANK_MODE_LABEL else "week"
+    entries = []
+    for tt in timetables:
+        hours = rank_hours(tt, mode, now, holiday=holiday)
+        if hours > 0:
+            entries.append((hours, tt))
+    if not entries:
+        return {
+            "mode": mode,
+            "rows": [],
+            "hidden": 0,
+            "total": 0,
+            "mine": None,
+            "reverse": reverse,
+        }
+
+    # reverse=True 时按课时从少到多排，作为“倒数排行”
+    entries.sort(key=lambda item: item[0], reverse=not reverse)
+    digits = {"today": 2, "week": 1, "month": 1, "term": 0}[mode]
+
+    # 先按完整榜单算出每人的并列名次，再裁剪显示，这样“我的名次”才准确
+    ranked = []
+    prev_shown = None
+    prev_rank = 0
+    for index, (hours, tt) in enumerate(entries):
+        shown = f"{hours:.{digits}f}"
+        if shown != prev_shown:
+            prev_rank = index + 1
+            prev_shown = shown
+        ranked.append(
+            {"rank": prev_rank, "shown": shown, "hours": hours, "timetable": tt}
+        )
+
+    visible = ranked if full else ranked[:9]
+    mine = next(
+        (
+            row
+            for row in ranked
+            if highlight_owner and row["timetable"].owner_id == highlight_owner
+        ),
+        None,
+    )
+    return {
+        "mode": mode,
+        "rows": visible,
+        "hidden": len(ranked) - len(visible),
+        "total": len(ranked),
+        "mine": mine,
+        "reverse": reverse,
+    }
+
+
 def format_rank(
     timetables: Sequence[Timetable],
     mode: str,
@@ -619,47 +686,33 @@ def format_rank(
     highlight_owner: str = "",
     reverse: bool = False,
 ) -> str:
-    mode = mode if mode in RANK_MODE_LABEL else "week"
-    entries = []
-    for tt in timetables:
-        hours = rank_hours(tt, mode, now, holiday=holiday)
-        if hours > 0:
-            entries.append((hours, tt))
-    if not entries:
+    data = rank_rows(
+        timetables,
+        mode,
+        now,
+        full=full,
+        holiday=holiday,
+        highlight_owner=highlight_owner,
+        reverse=reverse,
+    )
+    mode = data["mode"]
+    if not data["rows"]:
         return f"{RANK_MODE_LABEL[mode]}大家都没有课哦…"
 
-    # reverse=True 时按课时从少到多排，作为“倒数排行”
-    entries.sort(key=lambda item: item[0], reverse=not reverse)
-    digits = {"today": 2, "week": 1, "month": 1, "term": 0}[mode]
-
-    # 先按完整榜单算出每人的并列名次，再裁剪显示，这样“我的名次”才准确
-    ranked = []
-    prev_hours = None
-    prev_rank = 0
-    for index, (hours, tt) in enumerate(entries):
-        shown = f"{hours:.{digits}f}"
-        if shown != prev_hours:
-            prev_rank = index + 1
-            prev_hours = shown
-        ranked.append((prev_rank, shown, hours, tt))
-
-    visible = ranked if full else ranked[:9]
     default_title = f"{RANK_MODE_LABEL[mode]}课程时长榜"
     lines = [title or (f"{default_title}（倒数）" if reverse else default_title)]
-    for rank, shown, _hours, tt in visible:
-        name = tt.owner_name or tt.owner_id
-        lines.append(f"#{rank} {shown}小时 {name}")
-    if not full and len(ranked) > len(visible):
-        lines.append(f"…另有 {len(ranked) - len(visible)} 人未显示")
+    for row in data["rows"]:
+        name = row["timetable"].owner_name or row["timetable"].owner_id
+        lines.append(f"#{row['rank']} {row['shown']}小时 {name}")
+    if data["hidden"]:
+        lines.append(f"…另有 {data['hidden']} 人未显示")
 
-    mine = next(
-        (row for row in ranked if highlight_owner and row[3].owner_id == highlight_owner),
-        None,
-    )
+    mine = data["mine"]
     if mine:
-        rank, shown, _hours, _tt = mine
+        rank, shown = mine["rank"], mine["shown"]
         label = f"倒数第 {rank} 名" if reverse else f"第 {rank} 名"
-        if any(row[3].owner_id == highlight_owner for row in visible):
+        visible_ids = {row["timetable"].owner_id for row in data["rows"]}
+        if highlight_owner in visible_ids:
             lines.append(f"\n👤 你当前排{label}（{shown} 小时）")
         else:
             lines.append(f"\n👤 你当前排{label}（{shown} 小时，未进前九）")

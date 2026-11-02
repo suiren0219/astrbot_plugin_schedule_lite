@@ -80,6 +80,7 @@ try:
         everyone_report,
         format_day,
         format_rank,
+        rank_rows,
         is_abandoned,
         parse_query_date,
         status_now,
@@ -119,6 +120,7 @@ except ImportError:  # pragma: no cover - AstrBot 以脚本方式加载时
         everyone_report,
         format_day,
         format_rank,
+        rank_rows,
         is_abandoned,
         parse_query_date,
         status_now,
@@ -238,7 +240,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.19",
+    "v1.5.20",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1410,16 +1412,55 @@ class ScheduleLitePlugin(Star):
         if not visible:
             yield event.plain_result("本群还没有人导入课表哦。")
             return
+        now = self._now()
         mode_label = RANK_MODE_LABEL.get(mode, "本周")
+        title = f"本群{mode_label}课程时长榜" + ("（倒数）" if reverse else "")
+        highlight = tt.owner_id if tt else ""
+        data = rank_rows(
+            visible,
+            mode,
+            now,
+            full=full,
+            holiday=self._calendar_for(now.date()),
+            highlight_owner=highlight,
+            reverse=reverse,
+        )
+        if not data["rows"]:
+            yield event.plain_result(f"{mode_label}大家都没有课哦…")
+            return
+        # 优先发图片卡片，避免几十行文字刷屏；生成失败或关闭图片时退回文本
+        subtitle_parts = [f"{now:%m/%d}", f"共 {data['total']} 人"]
+        if data["hidden"]:
+            subtitle_parts.append(f"显示前 {len(data['rows'])} 名")
+        if data["mine"]:
+            mine = data["mine"]
+            label = f"倒数第 {mine['rank']} 名" if reverse else f"第 {mine['rank']} 名"
+            subtitle_parts.append(f"你{label} · {mine['shown']} 小时")
+        card_rows = []
+        for row in data["rows"]:
+            owner = row["timetable"].owner_name or row["timetable"].owner_id
+            if highlight and row["timetable"].owner_id == highlight:
+                owner += "（你）"
+            card_rows.append(
+                {
+                    "name": owner,
+                    "label": f"#{row['rank']}",
+                    "main": f"{row['shown']} 小时",
+                    "sub": "",
+                }
+            )
+        paths = self._render_rank_card(title, " · ".join(subtitle_parts), card_rows)
+        if paths and await self._send_image_pages(event, paths, title=title):
+            return
         yield event.plain_result(
             format_rank(
                 visible,
                 mode,
-                self._now(),
+                now,
                 full=full,
-                title=f"本群{mode_label}课程时长榜" + ("（倒数）" if reverse else ""),
-                holiday=self._calendar_for(self._now().date()),
-                highlight_owner=tt.owner_id if tt else "",
+                title=title,
+                holiday=self._calendar_for(now.date()),
+                highlight_owner=highlight,
                 reverse=reverse,
             )
         )
