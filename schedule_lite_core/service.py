@@ -617,6 +617,7 @@ def format_rank(
     title: str = "",
     holiday=None,
     highlight_owner: str = "",
+    reverse: bool = False,
 ) -> str:
     mode = mode if mode in RANK_MODE_LABEL else "week"
     entries = []
@@ -627,7 +628,8 @@ def format_rank(
     if not entries:
         return f"{RANK_MODE_LABEL[mode]}大家都没有课哦…"
 
-    entries.sort(key=lambda item: item[0], reverse=True)
+    # reverse=True 时按课时从少到多排，作为“倒数排行”
+    entries.sort(key=lambda item: item[0], reverse=not reverse)
     digits = {"today": 2, "week": 1, "month": 1, "term": 0}[mode]
 
     # 先按完整榜单算出每人的并列名次，再裁剪显示，这样“我的名次”才准确
@@ -642,7 +644,8 @@ def format_rank(
         ranked.append((prev_rank, shown, hours, tt))
 
     visible = ranked if full else ranked[:9]
-    lines = [title or f"{RANK_MODE_LABEL[mode]}课程时长榜"]
+    default_title = f"{RANK_MODE_LABEL[mode]}课程时长榜"
+    lines = [title or (f"{default_title}（倒数）" if reverse else default_title)]
     for rank, shown, _hours, tt in visible:
         name = tt.owner_name or tt.owner_id
         lines.append(f"#{rank} {shown}小时 {name}")
@@ -655,10 +658,11 @@ def format_rank(
     )
     if mine:
         rank, shown, _hours, _tt = mine
+        label = f"倒数第 {rank} 名" if reverse else f"第 {rank} 名"
         if any(row[3].owner_id == highlight_owner for row in visible):
-            lines.append(f"\n👤 你当前排第 {rank} 名（{shown} 小时）")
+            lines.append(f"\n👤 你当前排{label}（{shown} 小时）")
         else:
-            lines.append(f"\n👤 你当前排第 {rank} 名（{shown} 小时，未进前九）")
+            lines.append(f"\n👤 你当前排{label}（{shown} 小时，未进前九）")
     return "\n".join(lines)
 
 

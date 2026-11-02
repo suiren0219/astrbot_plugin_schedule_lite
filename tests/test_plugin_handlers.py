@@ -1244,6 +1244,22 @@ def test_rank_month_label(plugin):
     assert "本月" in out[0]
 
 
+def test_rank_reverse_option(plugin):
+    event = _Event("/课表 导入", group="g1")
+    _import_sample(plugin, event)
+    second = _Event("/课表 导入", uid="10002", nick="李四", group="g1")
+    asyncio.run(_collect(plugin._h_import(second, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    out = asyncio.run(_collect(plugin._h_rank(event, "学期 倒数")))
+    assert "（倒数）" in out[0]
+    assert "倒数第" in out[0]
+
+    # 正序关键字可以显式切回来
+    back = asyncio.run(_collect(plugin._h_rank(event, "学期 正序")))
+    assert "（倒数）" not in back[0]
+    assert "倒数第" not in back[0]
+
+
 def test_broadcast_claim_released_on_failure(tmp_path):
     import main as plugin_main
     from schedule_lite_core.model import Course, Timetable
