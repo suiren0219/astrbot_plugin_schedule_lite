@@ -1244,6 +1244,39 @@ def test_rank_month_label(plugin):
     assert "本月" in out[0]
 
 
+def test_rank_sends_image(image_plugin, tmp_path):
+    """排行默认发图片卡片，不再刷一屏文字。"""
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    event = _Event("/课表 导入", group="g1")
+    asyncio.run(_collect(image_plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    second = _Event("/课表 导入", uid="10002", nick="李四", group="g1")
+    asyncio.run(_collect(image_plugin._h_import(second, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    out = asyncio.run(_collect(image_plugin._h_rank(event, "学期")))
+    assert out == [], "图片发送成功时不应再发文字"
+    assert event.sent
+    first = event.sent[0].chain[0]
+    if hasattr(first, "nodes"):
+        assert first.nodes
+    else:
+        assert Path(str(getattr(first, "file", ""))).exists()
+    day_dirs = list((tmp_path / "cache" / "rank").glob("*/everyone-*.png"))
+    assert day_dirs
+
+
+def test_rank_falls_back_to_text(plugin):
+    """关闭图片或图片生成失败时，仍然返回原来的文字榜。"""
+    event = _Event("/课表 导入", group="g1")
+    _import_sample(plugin, event)
+    plugin.config["everyone_image"] = False
+    out = asyncio.run(_collect(plugin._h_rank(event, "学期 全部")))
+    assert out and "本学期课程时长榜" in out[0]
+    assert "#1" in out[0]
+
+
 def test_rank_reverse_option(plugin):
     event = _Event("/课表 导入", group="g1")
     _import_sample(plugin, event)

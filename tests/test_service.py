@@ -434,6 +434,41 @@ def test_rank_reverse_order_and_label():
     assert "倒数" not in normal
 
 
+def test_rank_rows_structure():
+    from datetime import datetime
+
+    from schedule_lite_core.model import Course
+    from schedule_lite_core.service import rank_rows
+
+    def make(uid, name, hours):
+        end = 8 + hours
+        tt = make_timetable()
+        tt.owner_id = uid
+        tt.owner_name = name
+        tt.courses = [
+            Course(
+                name="课", day=1, weeks=[1],
+                start="08:00", end=f"{int(end):02d}:{int(end % 1 * 60):02d}",
+            )
+        ]
+        tt.invalidate_index()
+        return tt
+
+    people = [make(f"u{i}", f"同学{i}", hours) for i, hours in enumerate([10, 6, 6, 1])]
+    now = datetime(2026, 9, 8, 12, tzinfo=TZ)
+    data = rank_rows(people, "week", now, highlight_owner="u1")
+    assert data["total"] == 4
+    assert [row["rank"] for row in data["rows"]] == [1, 2, 2, 4]  # 并列同名次
+    assert data["rows"][0]["shown"] == "10.0"
+    assert data["mine"]["rank"] == 2  # 6 小时与 u2 并列
+    assert data["hidden"] == 0
+
+    # 倒序时名次跟着反过来
+    reverse = rank_rows(people, "week", now, highlight_owner="u1", reverse=True)
+    assert reverse["rows"][0]["shown"] == "1.0"
+    assert reverse["mine"]["rank"] == 2
+
+
 def test_everyone_priority_and_hide_idle():
     from datetime import date
 
