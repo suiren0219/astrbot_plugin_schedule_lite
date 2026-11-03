@@ -425,6 +425,7 @@ def _draw_text_block(
     """
     prepared = []
     for text, font, fill, max_width in lines:
+        text = _strip_unrenderable(font, text)
         shown = _ellipsize(draw, text, font, max_width) if max_width else text
         prepared.append((shown, font, fill, _line_height(font)))
     total = sum(item[3] for item in prepared) + gap * max(len(prepared) - 1, 0)
@@ -490,9 +491,17 @@ def _new_page(
             dim = max(0, min(int(background_dim), 90))
         except (TypeError, ValueError):
             dim = 55
-        veil_color = (15, 23, 42) if dark else (255, 255, 255)
-        veil = Image.new("RGBA", size, veil_color + (int(dim / 100 * 235),))
-        base = Image.alpha_composite(base, veil)
+        if dark:
+            # 深色模式用遮罩：先压暗再叠深色层，背景保留轮廓但整体沉稳
+            from PIL import ImageEnhance
+
+            factor = max(1 - dim / 100 * 0.6, 0.25)
+            base = ImageEnhance.Brightness(base).enhance(factor).convert("RGBA")
+            scrim = Image.new("RGBA", size, (8, 12, 24) + (int(dim / 100 * 130),))
+            base = Image.alpha_composite(base, scrim)
+        else:
+            veil = Image.new("RGBA", size, (255, 255, 255) + (int(dim / 100 * 235),))
+            base = Image.alpha_composite(base, veil)
     overlay = Image.new("RGBA", size, (0, 0, 0, 0))
     return base, overlay, ImageDraw.Draw(overlay)
 
@@ -712,7 +721,43 @@ def render_help(
 # ---------------------------------------------------------------- 群友卡片
 
 
+_MISSING_GLYPH_CACHE: dict[int, set[str]] = {}
+
+
+def _strip_unrenderable(font, text: str) -> str:
+    """删掉当前字体画不出来的字符（emoji 等），避免出现方框占位符。"""
+    if not text:
+        return text
+    cache = _MISSING_GLYPH_CACHE.setdefault(id(font), set())
+    out = []
+    for ch in text:
+        code = ord(ch)
+        # emoji / 符号区：CJK 字体基本没有这些字形，直接删
+        if (
+            code >= 0x1F000
+            or 0x2600 <= code <= 0x27BF
+            or 0x2B00 <= code <= 0x2BFF
+            or 0xFE00 <= code <= 0xFE0F
+            or 0x200B <= code <= 0x200F
+            or code == 0xFFFD
+        ):
+            continue
+        if ch in cache:
+            continue
+        try:
+            mask = font.getmask(ch, mode="L")
+            missing = mask.getbbox() is None
+        except Exception:  # noqa: BLE001
+            missing = False
+        if missing:
+            cache.add(ch)
+            continue
+        out.append(ch)
+    return "".join(out)
+
+
 def _ellipsize(draw, text: str, font, max_width: float) -> str:
+    text = _strip_unrenderable(font, text)
     if not text:
         return ""
     if font.getlength(text) <= max_width:
@@ -866,9 +911,19 @@ def render_everyone(
         sub_color = style["subtitle"] if head_color == style["title"] else style["subtitle_on_dark"]
         brand_color = style["brand"] if head_color == style["title"] else style["brand_dark_bg"]
         draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
-        draw.text((_s(48), _s(58)), title, font=_font(bold, _s(36)), fill=head_color)
+        draw.text(
+            (_s(48), _s(58)),
+            _strip_unrenderable(_font(bold, _s(36)), title),
+            font=_font(bold, _s(36)),
+            fill=head_color,
+        )
         if subtitle:
-            draw.text((_s(48), _s(108)), subtitle, font=_font(regular, _s(18)), fill=sub_color)
+            draw.text(
+                (_s(48), _s(108)),
+                _strip_unrenderable(_font(regular, _s(18)), subtitle),
+                font=_font(regular, _s(18)),
+                fill=sub_color,
+            )
 
         y = _s(150)
         for kind, payload, _cost in chunk:
@@ -1086,9 +1141,19 @@ def render_day_card(
     sub_color = style["subtitle"] if title_color == style["title"] else style["subtitle_on_dark"]
     brand_color = style["brand"] if title_color == style["title"] else style["brand_dark_bg"]
     draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
-    draw.text((_s(48), _s(58)), title, font=_font(bold, _s(36)), fill=title_color)
+    draw.text(
+        (_s(48), _s(58)),
+        _strip_unrenderable(_font(bold, _s(36)), title),
+        font=_font(bold, _s(36)),
+        fill=title_color,
+    )
     if subtitle:
-        draw.text((_s(48), _s(108)), subtitle, font=_font(regular, _s(18)), fill=sub_color)
+        draw.text(
+            (_s(48), _s(108)),
+            _strip_unrenderable(_font(regular, _s(18)), subtitle),
+            font=_font(regular, _s(18)),
+            fill=sub_color,
+        )
 
     y = _s(header_h)
     if not rows:
