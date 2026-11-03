@@ -402,6 +402,39 @@ def _load_background(path: str, width: int, height: int) -> Any | None:
     return bg.crop((left, top, left + target_w, top + target_h))
 
 
+def _line_height(font) -> int:
+    """量一行文字的实际高度（以中英文混合串为准），用于整块垂直居中。"""
+    try:
+        box = font.getbbox("国Ay")
+        return max(box[3] - box[1], 1)
+    except Exception:  # noqa: BLE001
+        return int(getattr(font, "size", 16) * 1.2)
+
+
+def _draw_text_block(
+    draw: Any,
+    x: float,
+    center_y: float,
+    lines: Sequence[tuple[str, Any, str, float]],
+    gap: int = 4,
+) -> float:
+    """按「整块垂直居中」绘制多行文字，返回块高度。
+
+    lines: [(文本, 字体, 颜色, 最大宽度)]，宽度为 0 表示不截断。
+    这样不依赖固定偏移，换字体也不会压到卡片边框。
+    """
+    prepared = []
+    for text, font, fill, max_width in lines:
+        shown = _ellipsize(draw, text, font, max_width) if max_width else text
+        prepared.append((shown, font, fill, _line_height(font)))
+    total = sum(item[3] for item in prepared) + gap * max(len(prepared) - 1, 0)
+    top = center_y - total / 2
+    for shown, font, fill, height in prepared:
+        draw.text((x, top + height / 2), shown, font=font, fill=fill, anchor="lm")
+        top += height + gap
+    return total
+
+
 def _contrast_text(image: Any, box: tuple[int, int, int, int], dark: str = "#0F172A", light: str = "#FFFFFF") -> str:
     """按区域平均亮度挑文字颜色，自定义背景图偏暗时用白字。"""
     try:
@@ -850,29 +883,41 @@ def render_everyone(
                     outline=style["outline"],
                     width=_s(1),
                 )
-                cx, cy = _s(76), y + _s(row_h // 2)
+                row_center = y + _s(row_h) / 2
+                cx, cy = _s(76), row_center
                 _draw_avatar(overlay, draw, cx, cy, _s(28), str(entry.get("avatar") or ""), entry.get("name", ""))
 
-                name = _ellipsize(draw, entry.get("name", ""), _font(bold, _s(23)), _s(430))
-                draw.text((_s(122), y + _s(16)), name, font=_font(bold, _s(23)), fill=style["name"])
+                # 三行文字按整块垂直居中，换字体也不会压到卡片边框
+                _draw_text_block(
+                    draw,
+                    _s(122),
+                    row_center,
+                    [
+                        (str(entry.get("name", "")), _font(bold, _s(23)), style["name"], _s(430)),
+                        (str(entry.get("main", "")), _font(regular, _s(21)), style["main"], _s(width - 122 - 44)),
+                        (str(entry.get("sub", "")), _font(regular, _s(17)), style["sub"], _s(width - 122 - 44)),
+                    ],
+                    gap=_s(4),
+                )
 
                 label = entry.get("label", "")
                 chip_font = _font(bold, _s(17))
                 chip_w = chip_font.getlength(label) + _s(28)
                 chip_h_label = _s(32)
                 chip_x = _s(width - 44) - chip_w
+                chip_y = row_center - chip_h_label / 2
                 draw.rounded_rectangle(
-                    (chip_x, y + _s(16), chip_x + chip_w, y + _s(16) + chip_h_label),
+                    (chip_x, chip_y, chip_x + chip_w, chip_y + chip_h_label),
                     radius=_s(16),
                     fill=bg,
                 )
-                draw.text((chip_x + _s(14), y + _s(21)), label, font=chip_font, fill=fg)
-
-                main = _ellipsize(draw, entry.get("main", ""), _font(regular, _s(21)), _s(width - 122 - 44))
-                draw.text((_s(122), y + _s(50)), main, font=_font(regular, _s(21)), fill=style["main"])
-
-                sub = _ellipsize(draw, entry.get("sub", ""), _font(regular, _s(17)), _s(width - 122 - 44))
-                draw.text((_s(122), y + _s(78 - _s(0))), sub, font=_font(regular, _s(17)), fill=style["sub"])
+                draw.text(
+                    (chip_x + _s(14), chip_y + chip_h_label / 2),
+                    label,
+                    font=chip_font,
+                    fill=fg,
+                    anchor="lm",
+                )
                 y += _s(row_h + row_gap)
             elif kind == "divider":
                 draw.text((_s(48), y + _s(4)), str(payload), font=_font(bold, _s(18)), fill=style["muted"])
@@ -1062,24 +1107,22 @@ def render_day_card(
             outline=style["outline"],
             width=_s(1),
         )
+        row_center = y + _s(row_h) / 2
         time_text = str(row.get("time") or "")
         draw.text(
-            (_s(52), y + _s(16)),
-            time_text,
+            (_s(52), row_center),
+            _ellipsize(draw, time_text, _font(bold, _s(19)), _s(180)),
             font=_font(bold, _s(19)),
             fill=style["time"],
+            anchor="lm",
         )
-        name = _ellipsize(
-            draw,
-            str(row.get("name") or ""),
-            _font(bold, _s(23)),
-            _s(width - 420),
-        )
-        draw.text((_s(250), y + _s(13)), name, font=_font(bold, _s(23)), fill=style["name"])
         place = str(row.get("place") or "")
+        block = [
+            (str(row.get("name") or ""), _font(bold, _s(23)), style["name"], _s(width - 420)),
+        ]
         if place:
-            place = _ellipsize(draw, place, _font(regular, _s(15)), _s(width - 300))
-            draw.text((_s(250), y + _s(45)), place, font=_font(regular, _s(15)), fill=style["sub"])
+            block.append((place, _font(regular, _s(15)), style["sub"], _s(width - 300)))
+        _draw_text_block(draw, _s(250), row_center, block, gap=_s(4))
 
         marks = str(row.get("marks") or "")
         if marks:
@@ -1087,12 +1130,19 @@ def render_day_card(
             chip_font = _font(bold, _s(16))
             chip_w = chip_font.getlength(marks) + _s(26)
             chip_x = _s(width - 44) - chip_w
+            chip_y = row_center - _s(16)
             draw.rounded_rectangle(
-                (chip_x, y + _s(22), chip_x + chip_w, y + _s(22) + _s(32)),
+                (chip_x, chip_y, chip_x + chip_w, chip_y + _s(32)),
                 radius=_s(16),
                 fill=bg,
             )
-            draw.text((chip_x + _s(13), y + _s(27)), marks, font=chip_font, fill=fg)
+            draw.text(
+                (chip_x + _s(13), chip_y + _s(16)),
+                marks,
+                font=chip_font,
+                fill=fg,
+                anchor="lm",
+            )
         y += _s(row_h + gap)
 
     if next_note:
