@@ -246,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.29",
+    "v1.5.30",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -2266,6 +2266,12 @@ class ScheduleLitePlugin(Star):
     def _image_dark(self) -> bool:
         return bool(self._cfg("image_dark", False))
 
+    def _image_scrim(self) -> int:
+        try:
+            return max(0, min(int(self._cfg("image_scrim", 45)), 100))
+        except (TypeError, ValueError):
+            return 45
+
     def _image_quality(self) -> int:
         try:
             return max(50, min(int(self._cfg("image_quality", 85)), 95))
@@ -2295,6 +2301,7 @@ class ScheduleLitePlugin(Star):
                 background=self._image_background(),
                 background_dim=self._background_dim(),
                 dark=self._image_dark(),
+                scrim=self._image_scrim(),
                 image_quality=self._image_quality(),
             )
         except Exception as e:  # noqa: BLE001
@@ -2401,6 +2408,7 @@ class ScheduleLitePlugin(Star):
                 background=self._image_background(),
                 background_dim=self._background_dim(),
                 dark=self._image_dark(),
+                scrim=self._image_scrim(),
                 image_quality=self._image_quality(),
             )
         except Exception as e:  # noqa: BLE001
@@ -2606,6 +2614,7 @@ class ScheduleLitePlugin(Star):
                 background=self._image_background(),
                 background_dim=self._background_dim(),
                 dark=self._image_dark(),
+                scrim=self._image_scrim(),
                 image_quality=self._image_quality(),
             )
         except Exception as e:  # noqa: BLE001
@@ -3806,6 +3815,7 @@ class ScheduleLitePlugin(Star):
         "query_image",
         "image_background",
         "image_background_dim",
+        "image_scrim",
         "image_quality",
         "image_dark",
         "help_image",
@@ -3875,6 +3885,7 @@ class ScheduleLitePlugin(Star):
                 "everyone_hide_idle_over",
                 "everyone_active_days",
                 "image_background_dim",
+                "image_scrim",
                 "image_quality",
                 "showcase_min_minutes",
                 "showcase_min_users",

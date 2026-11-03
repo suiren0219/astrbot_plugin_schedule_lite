@@ -160,6 +160,17 @@
     "default": false,
     "hint": "卡片用深色底、浅色字，配深色背景图更和谐。开自定义背景时会改用深色蒙层。"
   },
+  "image_scrim": {
+    "description": "🕶️ 背景遮罩强度",
+    "type": "int",
+    "default": 45,
+    "hint": "深色模式下背景图上叠加的深色遮罩强度：0 不加遮罩（背景最亮），100 几乎全暗。",
+    "slider": {
+      "min": 0,
+      "max": 100,
+      "step": 5
+    }
+  },
   "image_quality": {
     "description": "🗜️ 背景图压缩质量",
     "type": "int",
