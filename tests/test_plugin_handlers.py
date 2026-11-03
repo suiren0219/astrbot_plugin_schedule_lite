@@ -1417,6 +1417,67 @@ def test_render_day_card_with_background(tmp_path):
     assert len(paths) == 1 and paths[0].is_file()
 
 
+def test_avatar_visible_over_faded_background(image_plugin, tmp_path):
+    """背景淡化后头像不能再被半透明行卡片盖住（图层合成回归）。"""
+    from PIL import Image
+
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    avatar = tmp_path / "avatar.png"
+    Image.new("RGB", (200, 200), (230, 120, 90)).save(avatar, "PNG")
+    bg = tmp_path / "bg.png"
+    Image.new("RGB", (800, 600), (30, 60, 120)).save(bg, "PNG")
+
+    paths = render.render_everyone(
+        [{"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": "",
+          "avatar": str(avatar)}],
+        tmp_path / "out",
+        background=str(bg),
+        background_dim=90,
+        width=900,
+        font_path="",
+    )
+    assert paths
+    image = Image.open(paths[0]).convert("RGB")
+    # 头像圆心在 (76, 150 + 96/2)，取中心像素应接近头像颜色而不是行底色
+    pixel = image.getpixel((76, 150 + 48))
+    assert abs(pixel[0] - 230) < 30 and abs(pixel[1] - 120) < 30 and abs(pixel[2] - 90) < 30
+
+
+def test_dark_mode_rendering(image_plugin, tmp_path):
+    """深色模式：卡片出深底浅字，带背景时同样可用。"""
+    from PIL import Image
+
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    entries = [
+        {"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": "", "avatar": ""},
+        {"name": "李四", "type": 4, "label": "已结束", "main": "下午课程已上完",
+         "sub": "共 3.2 小时", "avatar": "", "hours": 3.2},
+    ]
+    paths = render.render_everyone(
+        entries, tmp_path / "out-dark", dark=True, width=900, font_path=""
+    )
+    assert paths and paths[0].is_file()
+    image = Image.open(paths[0]).convert("RGB")
+    # 深色底：取行卡片左上角附近像素，应当偏暗
+    pixel = image.getpixel((40, 150 + 10))
+    assert sum(pixel[:3]) < 260
+
+    bg = tmp_path / "bg.png"
+    Image.new("RGB", (800, 600), (30, 60, 120)).save(bg, "PNG")
+    paths_bg = render.render_day_card(
+        [{"time": "08:00-09:40", "name": "高等数学", "place": "", "marks": "", "mark_kind": ""}],
+        tmp_path / "out-dark-day",
+        background=str(bg), background_dim=40, dark=True, width=900, font_path="",
+    )
+    assert paths_bg and paths_bg[0].is_file()
+
+
 def test_rank_sends_image(image_plugin, tmp_path):
     """排行默认发图片卡片，不再刷一屏文字。"""
     from schedule_lite_core import render

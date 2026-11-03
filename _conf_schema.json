@@ -154,6 +154,12 @@
       "step": 5
     }
   },
+  "image_dark": {
+    "description": "🌙 图片深色模式",
+    "type": "bool",
+    "default": false,
+    "hint": "卡片用深色底、浅色字，配深色背景图更和谐。开自定义背景时会改用深色蒙层。"
+  },
   "image_width": {
     "description": "📐 图片宽度（像素）",
     "type": "int",

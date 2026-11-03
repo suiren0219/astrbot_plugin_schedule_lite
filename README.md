@@ -168,6 +168,8 @@ data/plugin_data/astrbot_plugin_schedule_lite/help/
 卡片支持自定义背景图：控制台「设置 → 卡片背景图」上传（JPG/PNG/WebP，≤8 MB），
 或直接填绝对路径。`image_background_dim` 控制背景淡化程度，越大文字越清楚；
 背景偏暗时标题会自动转成白色字。课表、群友状态、排行三类卡片共用这张背景。
+开启 `image_dark`（控制台「图片深色模式」）后卡片改用深色底、浅色字，
+配深色背景图更和谐；淡化蒙层也会换成深色。
 
 ### 群友在上什么课
 
@@ -284,6 +286,7 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 | `query_image` | true | 课表查询发图片卡片，关闭后回到文字 |
 | `image_background` | 空 | 卡片背景图路径；控制台上传后自动填 `assets/background.png` |
 | `image_background_dim` | 55 | 背景淡化程度，0 接近原图、90 几乎纯白 |
+| `image_dark` | false | 图片深色模式：深色底、浅色字，配深色背景更和谐 |
 | `image_width` | 900 | 渲染图片宽度（像素） |
 | `font_path` | 空 | 自定义中文字体路径（Linux 常用） |
 | `everyone_page_size` | 8 | 状态卡片每页人数 |

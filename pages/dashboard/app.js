@@ -345,7 +345,7 @@
     if (path === "settings") {
       return {
         store_location: true, show_location: false, query_image: true, everyone_image: true, avatar_enabled: true,
-        image_background: "", image_background_dim: 55, help_image: true,
+        image_background: "", image_background_dim: 55, image_dark: false, help_image: true,
         everyone_page_size: 8, everyone_hide_idle_over: 12, everyone_active_days: 3,
         showcase_enabled: false, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
@@ -1089,6 +1089,7 @@
       set("#set-store-location", "store_location");
       set("#set-show-location", "show_location");
       set("#set-query-image", "query_image");
+      set("#set-image-dark", "image_dark");
       set("#set-everyone-image", "everyone_image");
       set("#set-bg-dim", "image_background_dim");
       renderBackgroundState(data.image_background || "");
@@ -1220,6 +1221,7 @@
       store_location: $("#set-store-location").checked,
       show_location: $("#set-show-location").checked,
       query_image: $("#set-query-image").checked,
+      image_dark: $("#set-image-dark").checked,
       everyone_image: $("#set-everyone-image").checked,
       image_background_dim: num("#set-bg-dim"),
       avatar_enabled: $("#set-avatar").checked,

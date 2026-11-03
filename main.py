@@ -246,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.23",
+    "v1.5.24",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -2171,6 +2171,9 @@ class ScheduleLitePlugin(Star):
             path = self._plugin_data_dir() / raw
         return str(path) if path.is_file() else ""
 
+    def _image_dark(self) -> bool:
+        return bool(self._cfg("image_dark", False))
+
     def _background_dim(self) -> int:
         try:
             return max(0, min(int(self._cfg("image_background_dim", 55)), 90))
@@ -2193,6 +2196,7 @@ class ScheduleLitePlugin(Star):
                 font_path=self._font_path(),
                 background=self._image_background(),
                 background_dim=self._background_dim(),
+                dark=self._image_dark(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 课表图片生成失败: {e}")
@@ -2297,6 +2301,7 @@ class ScheduleLitePlugin(Star):
                 font_path=self._font_path(),
                 background=self._image_background(),
                 background_dim=self._background_dim(),
+                dark=self._image_dark(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 课表卡片生成失败: {e}")
@@ -2500,6 +2505,7 @@ class ScheduleLitePlugin(Star):
                 font_path=self._font_path(),
                 background=self._image_background(),
                 background_dim=self._background_dim(),
+                dark=self._image_dark(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 排行卡片生成失败: {e}")
@@ -3699,6 +3705,7 @@ class ScheduleLitePlugin(Star):
         "query_image",
         "image_background",
         "image_background_dim",
+        "image_dark",
         "help_image",
         "image_width",
         "everyone_page_size",
@@ -3754,6 +3761,7 @@ class ScheduleLitePlugin(Star):
                 "everyone_image",
                 "avatar_enabled",
                 "query_image",
+                "image_dark",
                 "help_image",
                 "showcase_enabled",
                 "recap_enabled",
