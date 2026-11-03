@@ -1337,6 +1337,29 @@ def test_query_late_when_tomorrow_has_no_class(plugin):
     assert "明天没有课" in out[0]
 
 
+def test_query_hint_includes_countdown_events(image_plugin):
+    """课上完后的提示条要带上重要日期倒数（四六级等）。"""
+    event = _Event("/课表 导入")
+    _seed_two_day_timetable(image_plugin)
+    _force_now(image_plugin, 22)
+    image_plugin._events = [{"name": "大学英语等级考试4", "date": "2026-12-12"}]
+
+    captured = {}
+
+    def fake_render(tt, d, *, label="", now_min=None, next_note=""):
+        captured["note"] = next_note
+        return []
+
+    image_plugin._render_day_card = fake_render
+    out = asyncio.run(_collect(image_plugin._h_query(event, "")))
+
+    assert "明天早八" in captured.get("note", "")
+    assert "大学英语等级考试4" in captured.get("note", "")
+    assert "还有" in captured.get("note", "")
+    # 文字版也要带上
+    assert any("大学英语等级考试4" in line for line in out)
+
+
 def test_query_image_gets_tomorrow_hint(image_plugin):
     event = _Event("/课表 导入")
     _seed_two_day_timetable(image_plugin)

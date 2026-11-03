@@ -1130,7 +1130,8 @@ def render_day_card(
     style = CARD_STYLE[dark]
     mark_style = STATUS_STYLE_DARK if dark else MARK_STYLE
     row_h, gap, header_h, footer_h = 76, 10, 150, 64
-    note_h = 56 if next_note else 0
+    note_lines = [line for line in next_note.splitlines() if line.strip()]
+    note_h = (16 + 26 * len(note_lines)) if note_lines else 0
     count = max(len(rows), 1)
     height = header_h + count * (row_h + gap) - gap + note_h + footer_h
     image, overlay, draw = _new_page(width, height, background, background_dim, dark)
@@ -1210,18 +1211,21 @@ def render_day_card(
             )
         y += _s(row_h + gap)
 
-    if next_note:
+    if note_lines:
         draw.rounded_rectangle(
-            (_s(28), y, _s(width - 28), y + _s(48)),
+            (_s(28), y, _s(width - 28), y + _s(note_h - 8)),
             radius=_s(14),
             fill=style["band_fill"],
         )
-        draw.text(
-            (_s(48), y + _s(12)),
-            _ellipsize(draw, next_note, _font(bold, _s(19)), _s(width - 120)),
-            font=_font(bold, _s(19)),
-            fill=style["band_text"],
-        )
+        line_font = _font(bold, _s(17))
+        for index, line in enumerate(note_lines):
+            draw.text(
+                (_s(48), y + _s(10 + 26 * index + 13)),
+                _ellipsize(draw, line, line_font, _s(width - 120)),
+                font=line_font,
+                fill=style["band_text"],
+                anchor="lm",
+            )
         y += _s(note_h)
 
     draw.line(
