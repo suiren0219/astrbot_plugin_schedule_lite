@@ -246,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.28",
+    "v1.5.29",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1334,6 +1334,10 @@ class ScheduleLitePlugin(Star):
             current_min = now.hour * 60 + now.minute
             if self._today_classes_done(tt, today, current_min):
                 hint = self._tomorrow_hint(tt, today)
+                # 顺便提一嘴重要日期倒数（四六级等），最多两条
+                event_lines = self._upcoming_event_lines(today, within_days=60)
+                if event_lines:
+                    hint = "\n".join([hint, *event_lines[:2]])
         # 优先发图片卡片（长课表容易刷屏），关掉开关或生成失败时退回文字
         paths = self._render_day_card(
             tt, target_date, label=label, now_min=now_min, next_note=hint
