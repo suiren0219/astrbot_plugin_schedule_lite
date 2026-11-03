@@ -246,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.24",
+    "v1.5.25",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1431,6 +1431,12 @@ class ScheduleLitePlugin(Star):
         visible = self._group_timetables(group_id)
         if tt and tt not in visible:
             visible.append(tt)
+        # 3 天不发言同样剔除出排行：只过滤视图，数据本身不动；
+        # 再次发言即可恢复。当前发指令的人始终保留。
+        visible, inactive_hidden = self._filter_active_members(visible, group_id, self._now())
+        if tt and tt not in visible:
+            visible.append(tt)
+            inactive_hidden = max(inactive_hidden - 1, 0)
         if not visible:
             yield event.plain_result("本群还没有人导入课表哦。")
             return
@@ -2174,6 +2180,12 @@ class ScheduleLitePlugin(Star):
     def _image_dark(self) -> bool:
         return bool(self._cfg("image_dark", False))
 
+    def _image_quality(self) -> int:
+        try:
+            return max(50, min(int(self._cfg("image_quality", 85)), 95))
+        except (TypeError, ValueError):
+            return 85
+
     def _background_dim(self) -> int:
         try:
             return max(0, min(int(self._cfg("image_background_dim", 55)), 90))
@@ -2197,6 +2209,7 @@ class ScheduleLitePlugin(Star):
                 background=self._image_background(),
                 background_dim=self._background_dim(),
                 dark=self._image_dark(),
+                image_quality=self._image_quality(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 课表图片生成失败: {e}")
@@ -2302,6 +2315,7 @@ class ScheduleLitePlugin(Star):
                 background=self._image_background(),
                 background_dim=self._background_dim(),
                 dark=self._image_dark(),
+                image_quality=self._image_quality(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 课表卡片生成失败: {e}")
@@ -2506,6 +2520,7 @@ class ScheduleLitePlugin(Star):
                 background=self._image_background(),
                 background_dim=self._background_dim(),
                 dark=self._image_dark(),
+                image_quality=self._image_quality(),
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 排行卡片生成失败: {e}")
@@ -3705,6 +3720,7 @@ class ScheduleLitePlugin(Star):
         "query_image",
         "image_background",
         "image_background_dim",
+        "image_quality",
         "image_dark",
         "help_image",
         "image_width",
@@ -3773,6 +3789,7 @@ class ScheduleLitePlugin(Star):
                 "everyone_hide_idle_over",
                 "everyone_active_days",
                 "image_background_dim",
+                "image_quality",
                 "showcase_min_minutes",
                 "showcase_min_users",
                 "recap_weekday",

@@ -413,6 +413,29 @@ def _contrast_text(image: Any, box: tuple[int, int, int, int], dark: str = "#0F1
     return dark if mean >= 160 else light
 
 
+def _save_card(
+    image: Any,
+    overlay: Any,
+    path: Path,
+    *,
+    width: int,
+    height: int,
+    background: bool,
+    quality: int = 85,
+) -> Path:
+    """合成图层后落盘：带照片背景的卡片用 JPEG 压体积，纯文字卡用 PNG 保锐度。"""
+    merged = Image.alpha_composite(image, overlay).convert("RGB")
+    if background:
+        quality = max(50, min(int(quality), 95))
+        path = path.with_suffix(".jpg")
+        merged.resize((width, height), Image.LANCZOS).save(
+            path, "JPEG", quality=quality, optimize=True
+        )
+    else:
+        merged.resize((width, height), Image.LANCZOS).save(path, "PNG", optimize=True)
+    return path
+
+
 def _new_page(
     width: int,
     height: int,
@@ -749,6 +772,7 @@ def render_everyone(
     background: str = "",
     background_dim: int = 55,
     dark: bool = False,
+    image_quality: int = 85,
 ) -> list[Path]:
     if not available(font_path):
         return []
@@ -896,10 +920,15 @@ def render_everyone(
                 fill=footer_color,
             )
 
-        path = day_dir / f"everyone-{stamp}-{page_no}.png"
-        Image.alpha_composite(image, overlay).convert("RGB").resize(
-            (width, height), Image.LANCZOS
-        ).save(path, "PNG", optimize=True)
+        path = _save_card(
+            image,
+            overlay,
+            day_dir / f"everyone-{stamp}-{page_no}.png",
+            width=width,
+            height=height,
+            background=bool(background),
+            quality=image_quality,
+        )
         paths.append(path)
 
     return paths
@@ -983,6 +1012,7 @@ def render_day_card(
     background: str = "",
     background_dim: int = 55,
     dark: bool = False,
+    image_quality: int = 85,
 ) -> list[Path]:
     """渲染单日课表卡片。
 
@@ -1092,8 +1122,13 @@ def render_day_card(
         fill=footer_color,
     )
 
-    path = day_dir / f"day-{time.strftime('%Y%m%d%H%M%S')}.png"
-    Image.alpha_composite(image, overlay).convert("RGB").resize(
-        (width, height), Image.LANCZOS
-    ).save(path, "PNG", optimize=True)
+    path = _save_card(
+        image,
+        overlay,
+        day_dir / f"day-{time.strftime('%Y%m%d%H%M%S')}.png",
+        width=width,
+        height=height,
+        background=bool(background),
+        quality=image_quality,
+    )
     return [path]
