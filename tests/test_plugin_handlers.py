@@ -1567,6 +1567,32 @@ def test_rank_hides_inactive_members(plugin):
     assert "李四" in all_out[0]
 
 
+def test_card_text_blocks_fit_rows():
+    """按实际字高计算，状态卡三行/日卡两行都必须放得进行高，避免越出白框。"""
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    regular, bold = render._font_pair("")
+    s = render._s
+    row_h = s(96)  # 字高按 2 倍画布量，行高也要换算到同一尺度
+    block = (
+        render._line_height(render._font(bold, s(23)))
+        + render._line_height(render._font(regular, s(21)))
+        + render._line_height(render._font(regular, s(17)))
+        + s(4) * 2
+    )
+    assert block <= row_h - s(6), f"状态卡文本块 {block} 超出 {row_h} 行高"
+
+    day_row_h = s(76)
+    day_block = (
+        render._line_height(render._font(bold, s(23)))
+        + render._line_height(render._font(regular, s(15)))
+        + s(4)
+    )
+    assert day_block <= day_row_h - s(6), f"日卡文本块 {day_block} 超出 {day_row_h} 行高"
+
+
 def test_card_compresses_to_jpeg_with_background(tmp_path):
     """带背景图的卡片改用 JPEG；质量越低体积越小，纯文字卡仍用 PNG。"""
     from PIL import Image
