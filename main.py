@@ -246,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.27",
+    "v1.5.28",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -267,6 +267,7 @@ class ScheduleLitePlugin(Star):
         self._makeup_values: dict[str, int] = {}
         self._events: list[dict] = []
         self._broadcast_state: dict[str, dict[str, str]] = {}
+        self._broadcast_failures: dict[str, dict[str, tuple[str, int]]] = {}
         # 按用户缓存当天的课程快照和分钟级状态，多个群查询可直接复用
         self._day_cache: dict[tuple[int, str, int], list] = {}
         self._status_cache: dict[tuple[int, str, int, bool], dict] = {}
@@ -692,7 +693,9 @@ class ScheduleLitePlugin(Star):
                 api_url=str(self._cfg("holiday_api_url", "") or ""),
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning(f"[{PLUGIN_NAME}] {year} 年节假日更新失败: {exc}")
+            # 未来年份的官方数据通常还没发布，降级为 info 避免整年刷警告
+            log = logger.info if year > self._now().year else logger.warning
+            log(f"[{PLUGIN_NAME}] {year} 年节假日更新失败: {exc}")
             return
         calendar.save(self._holiday_cache_path(year))
         self._holidays[year] = calendar
@@ -728,9 +731,23 @@ class ScheduleLitePlugin(Star):
         except (OSError, ValueError):
             payload = {}
         if isinstance(payload, dict):
+            state = payload.get("claims")
+            failures = payload.get("failures")
             self._broadcast_state = {
-                str(k): v for k, v in payload.items() if isinstance(v, dict)
+                str(k): v
+                for k, v in (state.items() if isinstance(state, dict) else payload.items())
+                if isinstance(v, dict)
             }
+            if isinstance(failures, dict):
+                for kind, bucket in failures.items():
+                    if not isinstance(bucket, dict):
+                        continue
+                    clean = {}
+                    for gid, item in bucket.items():
+                        if isinstance(item, (list, tuple)) and len(item) == 2:
+                            clean[str(gid)] = (str(item[0]), int(item[1]))
+                    if clean:
+                        self._broadcast_failures[str(kind)] = clean
 
     def _save_broadcast_state(self) -> None:
         path = self._broadcast_state_path()
@@ -738,7 +755,17 @@ class ScheduleLitePlugin(Star):
             path.parent.mkdir(parents=True, exist_ok=True)
             tmp = path.with_suffix(".tmp")
             tmp.write_text(
-                json.dumps(self._broadcast_state, ensure_ascii=False, indent=2),
+                json.dumps(
+                    {
+                        "claims": self._broadcast_state,
+                        "failures": {
+                            kind: {gid: list(item) for gid, item in bucket.items()}
+                            for kind, bucket in self._broadcast_failures.items()
+                        },
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
                 encoding="utf-8",
             )
             tmp.replace(path)
@@ -830,6 +857,53 @@ class ScheduleLitePlugin(Star):
         bucket = self._broadcast_state.get(kind)
         if bucket and bucket.pop(group_id, None) is not None:
             self._save_broadcast_state()
+
+    def _note_broadcast_failure(self, kind: str, group_id: str, day: date) -> int:
+        """记录当天发送失败次数；换天自动清零。返回累计失败次数。"""
+        bucket = self._broadcast_failures.setdefault(kind, {})
+        key = day.isoformat()
+        value = bucket.get(group_id)
+        count = value[1] + 1 if isinstance(value, tuple) and value[0] == key else 1
+        bucket[group_id] = (key, count)
+        self._save_broadcast_state()
+        return count
+
+    def _broadcast_failures_today(self, kind: str, group_id: str, day: date) -> int:
+        bucket = self._broadcast_failures.get(kind, {})
+        value = bucket.get(group_id)
+        if isinstance(value, tuple) and value[0] == day.isoformat():
+            return int(value[1])
+        return 0
+
+    async def _send_broadcast(
+        self,
+        kind: str,
+        group_id: str,
+        day: date,
+        origin: str,
+        chains: Sequence[MessageChain],
+        log_label: str,
+    ) -> tuple[bool, int]:
+        """按顺序尝试发送（图片 → 文字兜底）。
+
+        返回 (是否送达, 当天累计失败次数)。连续失败 3 次后由调用方保留名额、
+        当天不再重试，避免整晚每分钟刷一次警告。
+        """
+        for chain in chains:
+            if chain is None:
+                continue
+            try:
+                await self.context.send_message(origin, chain)
+                return True, self._broadcast_failures_today(kind, group_id, day)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] {log_label}发送失败 {group_id}: {exc}")
+        failures = self._note_broadcast_failure(kind, group_id, day)
+        if failures >= 3:
+            logger.warning(
+                f"[{PLUGIN_NAME}] {log_label}已连续 {failures} 次发送失败，"
+                f"今天不再重试（{group_id}）"
+            )
+        return False, failures
 
     def _hide_idle_over(self) -> int:
         try:
@@ -2644,23 +2718,25 @@ class ScheduleLitePlugin(Star):
                 f"⏰ 明日早八提醒 · {tomorrow:%m/%d} {weekday_cn(tomorrow)}"
                 f" · 共 {len(rows)} 人"
             )
-            chain = self._build_at_chain(rows, header) if use_at else None
-            if chain is None:
-                lines = [header]
-                for index, (tt, item) in enumerate(rows[:20], 1):
-                    course = item.course
-                    line = (
-                        f"{index}. {tt.owner_name or tt.owner_id} · "
-                        f"{course.name} {item.start}-{item.end}"
-                    )
-                    if course.location and self._show_location():
-                        line += f" @{course.location}"
-                    lines.append(line)
-                chain = MessageChain().message("\n".join(lines))
-            try:
-                await self.context.send_message(origin, chain)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"[{PLUGIN_NAME}] 早八推送失败 {group_id}: {exc}")
+            chains = []
+            image_chain = self._build_at_chain(rows, header) if use_at else None
+            if image_chain is not None:
+                chains.append(image_chain)
+            lines = [header]
+            for index, (tt, item) in enumerate(rows[:20], 1):
+                course = item.course
+                line = (
+                    f"{index}. {tt.owner_name or tt.owner_id} · "
+                    f"{course.name} {item.start}-{item.end}"
+                )
+                if course.location and self._show_location():
+                    line += f" @{course.location}"
+                lines.append(line)
+            chains.append(MessageChain().message("\n".join(lines)))
+            delivered, failures = await self._send_broadcast(
+                "early", group_id, today, origin, chains, "早八推送"
+            )
+            if not delivered and failures < 3:
                 self._release_broadcast("early", group_id)
 
     async def _run_showcase(self, now: datetime, origins: dict[str, str]) -> None:
@@ -2712,16 +2788,15 @@ class ScheduleLitePlugin(Star):
                     for index, (minutes, name) in enumerate(ranked[:20], 1)
                 ],
             )
-            chain = self._rank_image_chain(paths)
-            if chain is None:
-                lines = ["🌙 今日满课榜", f"{today:%m/%d} · 共 {len(ranked)} 人"]
-                for index, (minutes, name) in enumerate(ranked[:10], 1):
-                    lines.append(f"{index}. {name} · {minutes / 60:.1f} 小时")
-                chain = MessageChain().message("\n".join(lines))
-            try:
-                await self.context.send_message(origin, chain)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"[{PLUGIN_NAME}] 满课榜发送失败 {group_id}: {exc}")
+            image_chain = self._rank_image_chain(paths)
+            lines = ["🌙 今日满课榜", f"{today:%m/%d} · 共 {len(ranked)} 人"]
+            for index, (minutes, name) in enumerate(ranked[:10], 1):
+                lines.append(f"{index}. {name} · {minutes / 60:.1f} 小时")
+            text_chain = MessageChain().message("\n".join(lines))
+            delivered, failures = await self._send_broadcast(
+                "showcase", group_id, today, origin, [image_chain, text_chain], "满课榜"
+            )
+            if not delivered and failures < 3:
                 self._release_broadcast("showcase", group_id)
 
     async def _run_recap(self, now: datetime, origins: dict[str, str]) -> None:
@@ -2772,16 +2847,15 @@ class ScheduleLitePlugin(Star):
                     for index, (hours, name) in enumerate(ranked[:top_n], 1)
                 ],
             )
-            chain = self._rank_image_chain(paths)
-            if chain is None:
-                lines = [f"📊 {label}累计上课榜", f"截至 {today:%m/%d}"]
-                for index, (hours, name) in enumerate(ranked[:top_n], 1):
-                    lines.append(f"#{index} {name} · {hours:.1f} 小时")
-                chain = MessageChain().message("\n".join(lines))
-            try:
-                await self.context.send_message(origin, chain)
-            except Exception as exc:  # noqa: BLE001
-                logger.warning(f"[{PLUGIN_NAME}] 周报发送失败 {group_id}: {exc}")
+            image_chain = self._rank_image_chain(paths)
+            lines = [f"📊 {label}累计上课榜", f"截至 {today:%m/%d}"]
+            for index, (hours, name) in enumerate(ranked[:top_n], 1):
+                lines.append(f"#{index} {name} · {hours:.1f} 小时")
+            text_chain = MessageChain().message("\n".join(lines))
+            delivered, failures = await self._send_broadcast(
+                "recap", group_id, today, origin, [image_chain, text_chain], "累计榜"
+            )
+            if not delivered and failures < 3:
                 self._release_broadcast("recap", group_id)
 
     # ---------------------------------------------------------- 请假 / 调课 / 调休
