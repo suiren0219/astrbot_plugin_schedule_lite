@@ -80,11 +80,9 @@ try:
         everyone_report,
         format_day,
         format_rank,
-        half_label,
         rank_rows,
         is_abandoned,
         parse_query_date,
-        scope_day_half,
         status_now,
         timetables_of_group,
         weekday_cn,
@@ -123,11 +121,9 @@ except ImportError:  # pragma: no cover - AstrBot 以脚本方式加载时
         everyone_report,
         format_day,
         format_rank,
-        half_label,
         rank_rows,
         is_abandoned,
         parse_query_date,
-        scope_day_half,
         status_now,
         timetables_of_group,
         weekday_cn,
@@ -246,7 +242,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.30",
+    "v1.5.31",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -2340,29 +2336,34 @@ class ScheduleLitePlugin(Star):
         now_min: int | None = None,
         next_note: str = "",
     ):
-        """把单日课表渲染成图片；没有课程或当前时段已无课时返回空，交给文字兜底。"""
+        """把单日课表渲染成图片：双列展示全天课程，高亮正在上的和下一节课。
+
+        查询“今天”时才按当前时间标记（进行中 / 下一节）；没课且没有提示时
+        返回空交给文字兜底。
+        """
         if not self._image_enabled("query_image"):
             return []
         calendar = self._calendar_for(d)
-        all_items = day_entries(tt, d, calendar)
+        items = day_entries(tt, d, calendar)
         empty_text = ""
-        half_note = ""
-        items = all_items
-        if not all_items:
+        if not items:
             if not next_note:
                 return []
             empty_text = "今天没有课～"
-        elif now_min is not None:
-            items, half, finished_note, _other = scope_day_half(all_items, now_min)
-            if finished_note:
-                if not next_note:
-                    return []  # 只有一句话时交给文字说
-                items, empty_text = [], finished_note
-            elif len(items) < len(all_items):
-                half_note = f" · 仅{half_label(half)}"
+        # 只在查今天时找当前课和下一节；day_entries 已按开始时间排序
+        current_idx = next_idx = -1
+        if items and now_min is not None:
+            for index, item in enumerate(items):
+                start = minutes_of(item.start)
+                end = minutes_of(item.end)
+                if current_idx < 0 and start is not None and end is not None and start <= now_min < end:
+                    current_idx = index
+                if start is not None and start > now_min:
+                    next_idx = index
+                    break
         rows = []
         leave = tt.leave_on(d)
-        for item in items:
+        for index, item in enumerate(items):
             marks = []
             kind = ""
             if item.moved:
@@ -2374,6 +2375,11 @@ class ScheduleLitePlugin(Star):
             if is_abandoned(tt, item.course, item.start, d):
                 marks.append("翘课")
                 kind = "skip"
+            highlight = ""
+            if index == current_idx:
+                highlight = "now"
+            elif index == next_idx:
+                highlight = "next"
             rows.append(
                 {
                     "time": f"{item.start}-{item.end}",
@@ -2381,6 +2387,7 @@ class ScheduleLitePlugin(Star):
                     "place": item.course.location if self._show_location() else "",
                     "marks": " · ".join(marks),
                     "mark_kind": kind,
+                    "highlight": highlight,
                 }
             )
         week, state = week_state(tt, d)
@@ -2389,7 +2396,6 @@ class ScheduleLitePlugin(Star):
             subtitle += f" · 第 {week} 周"
         if label:
             subtitle = f"{label} · {subtitle}"
-        subtitle += half_note
         footer = "发送 /课表 查看自己的课表"
         if tt.term_guessed:
             footer = "开学日期按导入当天推算，发 /课表 学期 2026-09-07 可修正"
@@ -2621,6 +2627,31 @@ class ScheduleLitePlugin(Star):
             logger.warning(f"[{PLUGIN_NAME}] 排行卡片生成失败: {e}")
             return []
 
+    def _render_grid_card(self, title: str, subtitle: str, cells: list[dict], *, footer_note: str = "") -> list:
+        """双列网格名单卡片（早八推送等场景）：失败返回空列表退回文本。"""
+        try:
+            cache_dir = self._plugin_data_dir() / "cache" / "grid"
+            return render_mod.render_grid_card(
+                cells,
+                cache_dir,
+                title=title,
+                subtitle=subtitle,
+                footer_note=footer_note,
+                width=self._image_width(),
+                font_path=self._font_path(),
+                background=self._image_background(),
+                background_dim=self._background_dim(),
+                dark=self._image_dark(),
+                scrim=self._image_scrim(),
+                image_quality=self._image_quality(),
+                columns=2,
+                cell_h=64,
+                rows_per_col=10,
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(f"[{PLUGIN_NAME}] 网格卡片生成失败: {e}")
+            return []
+
     def _rank_image_chain(self, paths) -> MessageChain | None:
         if not paths:
             return None
@@ -2732,20 +2763,40 @@ class ScheduleLitePlugin(Star):
                 f" · 共 {len(rows)} 人"
             )
             chains = []
-            image_chain = self._build_at_chain(rows, header) if use_at else None
+            # 图片版：双列卡片一张发完，不刷屏；生成失败退回文字名单
+            image_chain = None
+            if self._image_enabled("early_image"):
+                cells = []
+                for tt, item in rows[:40]:
+                    course = item.course
+                    sub = f"{course.name} {item.start}-{item.end}"
+                    if course.location and self._show_location():
+                        sub += f" · {course.location}"
+                    cells.append({"name": tt.owner_name or tt.owner_id, "sub": sub})
+                paths = self._render_grid_card(
+                    "明日早八提醒",
+                    f"{tomorrow:%m/%d} {weekday_cn(tomorrow)} · 共 {len(rows)} 人",
+                    cells,
+                    footer_note="发送 /课表 绑定课表",
+                )
+                image_chain = self._rank_image_chain(paths)
             if image_chain is not None:
                 chains.append(image_chain)
-            lines = [header]
-            for index, (tt, item) in enumerate(rows[:20], 1):
-                course = item.course
-                line = (
-                    f"{index}. {tt.owner_name or tt.owner_id} · "
-                    f"{course.name} {item.start}-{item.end}"
-                )
-                if course.location and self._show_location():
-                    line += f" @{course.location}"
-                lines.append(line)
-            chains.append(MessageChain().message("\n".join(lines)))
+            at_chain = self._build_at_chain(rows, header) if use_at else None
+            if at_chain is not None:
+                chains.append(at_chain)
+            if image_chain is None:
+                lines = [header]
+                for index, (tt, item) in enumerate(rows[:20], 1):
+                    course = item.course
+                    line = (
+                        f"{index}. {tt.owner_name or tt.owner_id} · "
+                        f"{course.name} {item.start}-{item.end}"
+                    )
+                    if course.location and self._show_location():
+                        line += f" @{course.location}"
+                    lines.append(line)
+                chains.append(MessageChain().message("\n".join(lines)))
             delivered, failures = await self._send_broadcast(
                 "early", group_id, today, origin, chains, "早八推送"
             )
@@ -3842,6 +3893,7 @@ class ScheduleLitePlugin(Star):
         "early_time",
         "early_max_start",
         "early_at",
+        "early_image",
     )
 
     def _settings_view(self) -> dict:
@@ -3878,6 +3930,7 @@ class ScheduleLitePlugin(Star):
                 "showcase_enabled",
                 "recap_enabled",
                 "holiday_enabled",
+                "early_image",
             }
             int_keys = {
                 "image_width",

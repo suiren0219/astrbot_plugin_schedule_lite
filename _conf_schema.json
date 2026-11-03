@@ -361,5 +361,11 @@
     "type": "bool",
     "default": false,
     "hint": "开启后逐个 @ 对应同学；平台不支持 At 时自动退回纯文本。"
+  },
+  "early_image": {
+    "description": "🖼️ 早八推送用图片",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后早八推送改为一张双列卡片（按上课时间排序），不再发文字名单刷屏；生成失败时自动退回文字。"
   }
 }

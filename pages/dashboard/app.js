@@ -352,7 +352,7 @@
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
         holiday_enabled: true, holiday_api_url: "https://timor.tech/api/holiday/year/{year}",
         holiday_cache_hours: 24, makeup_weekday_map: "",
-        early_enabled: false, early_time: "21:30", early_max_start: "08:00", early_at: false,
+        early_enabled: false, early_time: "21:30", early_max_start: "08:00", early_at: false, early_image: true,
       };
     }
     if (path === "holidays") {
@@ -1121,6 +1121,7 @@
       set("#set-early-time", "early_time");
       set("#set-early-max", "early_max_start");
       set("#set-early-at", "early_at");
+      set("#set-early-image", "early_image");
       try {
         const events = await apiGet("events");
         renderEvents((events && events.items) || []);
@@ -1253,6 +1254,7 @@
       early_time: $("#set-early-time").value.trim(),
       early_max_start: $("#set-early-max").value.trim(),
       early_at: $("#set-early-at").checked,
+      early_image: $("#set-early-image").checked,
     };
     try {
       await apiPost("settings/save", payload);

@@ -737,6 +737,7 @@ def _strip_unrenderable(font, text: str) -> str:
         # emoji / 符号区：CJK 字体基本没有这些字形，直接删
         if (
             code >= 0x1F000
+            or 0x2300 <= code <= 0x23FF
             or 0x2600 <= code <= 0x27BF
             or 0x2B00 <= code <= 0x2BFF
             or 0xFE00 <= code <= 0xFE0F
@@ -1120,10 +1121,83 @@ def render_day_card(
     image_quality: int = 85,
     scrim: int = 45,
 ) -> list[Path]:
-    """渲染单日课表卡片。
+    """渲染单日课表卡片（双列网格，直接展示全天课程）。
 
     rows: [{"time": "08:00-09:40", "name": "高等数学", "place": "松1-303",
-            "marks": "翘课", "mark_kind": "skip"}]
+            "marks": "翘课", "mark_kind": "skip",
+            "highlight": "now"|"next"|""}]
+    highlight = "now" 的课蓝框加「进行中」徽章，"next" 黄框加「下一节」徽章。
+    """
+    cells: list[dict] = []
+    for row in rows:
+        sub = str(row.get("time") or "")
+        place = str(row.get("place") or "")
+        marks = str(row.get("marks") or "")
+        for extra in (place, marks):
+            if extra:
+                sub = f"{sub} · {extra}" if sub else extra
+        highlight = str(row.get("highlight") or "")
+        cells.append(
+            {
+                "name": str(row.get("name") or ""),
+                "sub": sub,
+                "highlight": highlight,
+                "badge": {"now": "进行中", "next": "下一节"}.get(highlight, ""),
+                "badge_kind": highlight,
+            }
+        )
+    note_lines = [line for line in next_note.splitlines() if line.strip()]
+    return render_grid_card(
+        cells,
+        out_dir,
+        title=title,
+        subtitle=subtitle,
+        footer_note=footer_note,
+        width=width,
+        font_path=font_path,
+        background=background,
+        background_dim=background_dim,
+        dark=dark,
+        image_quality=image_quality,
+        scrim=scrim,
+        columns=2,
+        cell_h=64,
+        rows_per_col=12,
+        empty_text=empty_text,
+        note_lines=note_lines,
+        file_prefix="day",
+    )
+
+
+# ---------------------------------------------------------------- 双列网格卡片
+
+
+def render_grid_card(
+    rows: Sequence[dict],
+    out_dir: str | Path,
+    *,
+    title: str = "",
+    subtitle: str = "",
+    footer_note: str = "",
+    width: int = 900,
+    font_path: str = "",
+    background: str = "",
+    background_dim: int = 55,
+    dark: bool = False,
+    image_quality: int = 85,
+    scrim: int = 45,
+    columns: int = 2,
+    cell_h: int = 62,
+    rows_per_col: int = 8,
+    empty_text: str = "没有数据",
+    note_lines: Sequence[str] = (),
+    file_prefix: str = "grid",
+) -> list[Path]:
+    """通用双列（或多列）网格卡片。
+
+    rows: [{"name": "皮卡丘", "sub": "数学 07:30-08:10",
+            "badge": "进行中", "badge_kind": "now", "highlight": True}, ...]
+    highlight: "now" 蓝框、「进行中」徽章；"next" 黄框、「下一节」徽章。
     """
     if not available(font_path):
         return []
@@ -1134,128 +1208,172 @@ def render_day_card(
     _prune_day_dirs(out, day_dir.name, keep=3)
 
     style = CARD_STYLE[dark]
-    mark_style = STATUS_STYLE_DARK if dark else MARK_STYLE
-    row_h, gap, header_h, footer_h = 76, 10, 150, 64
-    note_lines = [line for line in next_note.splitlines() if line.strip()]
-    note_h = (16 + 26 * len(note_lines)) if note_lines else 0
-    count = max(len(rows), 1)
-    height = header_h + count * (row_h + gap) - gap + note_h + footer_h
-    image, overlay, draw = _new_page(
-        width, height, background, background_dim, dark, scrim
-    )
+    status_style = STATUS_STYLE_DARK if dark else STATUS_STYLE
+    columns = max(1, min(int(columns or 2), 4))
+    cell_h = max(int(cell_h or 62), 44)
+    cell_gap, col_gap = 8, 10
+    rows_per_col = max(int(rows_per_col or 8), 4)
+    per_page = columns * rows_per_col
+    footer_h = 64
 
-    draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
-    head_box = (0, 0, _s(width), _s(header_h))
-    title_color = _contrast_text(image, head_box)
-    sub_color = style["subtitle"] if title_color == style["title"] else style["subtitle_on_dark"]
-    brand_color = style["brand"] if title_color == style["title"] else style["brand_dark_bg"]
-    draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
-    draw.text(
-        (_s(48), _s(58)),
-        _strip_unrenderable(_font(bold, _s(36)), title),
-        font=_font(bold, _s(36)),
-        fill=title_color,
-    )
-    if subtitle:
-        draw.text(
-            (_s(48), _s(108)),
-            _strip_unrenderable(_font(regular, _s(18)), subtitle),
-            font=_font(regular, _s(18)),
-            fill=sub_color,
+    chunks = [rows[i : i + per_page] for i in range(0, len(rows), per_page)] or [[]]
+    stamp = time.strftime("%Y%m%d%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
+    paths: list[Path] = []
+
+    notes = [line for line in note_lines if str(line).strip()]
+    note_h = (16 + 26 * len(notes)) if notes else 0
+
+    for page_no, chunk in enumerate(chunks, start=1):
+        grid_rows = max(math.ceil(len(chunk) / columns), 1)
+        height = 150 + grid_rows * (cell_h + cell_gap) - cell_gap + note_h + footer_h
+        image, overlay, draw = _new_page(
+            width, height, background, background_dim, dark, scrim
         )
 
-    y = _s(header_h)
-    if not rows:
+        draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
+        head_color = _contrast_text(image, (0, 0, _s(width), _s(150)))
+        sub_color = style["subtitle"] if head_color == style["title"] else style["subtitle_on_dark"]
+        brand_color = style["brand"] if head_color == style["title"] else style["brand_dark_bg"]
+        draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
         draw.text(
-            (_s(52), y + _s(12)),
-            empty_text,
-            font=_font(regular, _s(22)),
-            fill=style["empty"],
+            (_s(48), _s(58)),
+            _strip_unrenderable(_font(bold, _s(36)), title),
+            font=_font(bold, _s(36)),
+            fill=head_color,
         )
-        y += _s(row_h + gap)
-    for row in rows:
-        draw.rounded_rectangle(
-            (_s(28), y, _s(width - 28), y + _s(row_h)),
-            radius=_s(16),
-            fill=style["surface"],
-            outline=style["outline"],
+        if subtitle:
+            draw.text(
+                (_s(48), _s(108)),
+                _strip_unrenderable(_font(regular, _s(18)), subtitle),
+                font=_font(regular, _s(18)),
+                fill=sub_color,
+            )
+
+        cell_w = (width - 56 - (columns - 1) * col_gap) / columns
+        y = _s(150)
+        if not chunk:
+            draw.text(
+                (_s(width / 2), y + _s((cell_h + cell_gap) / 2)),
+                _strip_unrenderable(_font(regular, _s(18)), empty_text),
+                font=_font(regular, _s(18)),
+                fill=style["empty"],
+                anchor="mm",
+            )
+        for index, row in enumerate(chunk):
+            col = index % columns
+            grid_row = index // columns
+            x = 28 + col * (cell_w + col_gap)
+            yy = y + _s(grid_row * (cell_h + cell_gap))
+            highlight = str(row.get("highlight") or "")
+            outline_color = style["outline"]
+            outline_w = 1
+            if highlight == "now":
+                outline_color, outline_w = "#3B82F6", 2
+            elif highlight == "next":
+                outline_color, outline_w = "#F59E0B", 2
+            draw.rounded_rectangle(
+                (_s(x), yy, _s(x + cell_w), yy + _s(cell_h)),
+                radius=_s(14),
+                fill=style["surface"],
+                outline=outline_color,
+                width=_s(outline_w),
+            )
+            center_y = yy + _s(cell_h) / 2
+            _draw_text_block(
+                draw,
+                _s(x + 16),
+                center_y,
+                [
+                    (
+                        str(row.get("name") or ""),
+                        _font(bold, _s(19)),
+                        style["name"],
+                        _s(cell_w - 110),
+                    ),
+                    (
+                        str(row.get("sub") or ""),
+                        _font(regular, _s(14)),
+                        style["sub"],
+                        _s(cell_w - 24),
+                    ),
+                ],
+                gap=_s(2),
+            )
+            badge = str(row.get("badge") or "")
+            if badge:
+                kind = str(row.get("badge_kind") or "")
+                fg, bg_color = status_style.get(
+                    {"now": 1, "next": 3}.get(kind, 5), status_style[5]
+                )
+                badge_font = _font(bold, _s(15))
+                badge_w = badge_font.getlength(badge) / SCALE + 24
+                badge_x = x + cell_w - 12 - badge_w
+                badge_y = yy + _s(10)
+                draw.rounded_rectangle(
+                    (_s(badge_x), badge_y, _s(badge_x + badge_w), badge_y + _s(28)),
+                    radius=_s(14),
+                    fill=bg_color,
+                )
+                draw.text(
+                    (_s(badge_x + 12), badge_y + _s(14)),
+                    badge,
+                    font=badge_font,
+                    fill=fg,
+                    anchor="lm",
+                )
+
+        y = y + grid_rows * _s(cell_h + cell_gap)
+        if notes:
+            draw.rounded_rectangle(
+                (_s(28), y, _s(width - 28), y + _s(note_h - 8)),
+                radius=_s(14),
+                fill=style["band_fill"],
+            )
+            note_font = _font(bold, _s(17))
+            for note_index, note in enumerate(notes):
+                draw.text(
+                    (_s(48), y + _s(10 + 26 * note_index + 13)),
+                    _ellipsize(draw, note, note_font, _s(width - 120)),
+                    font=note_font,
+                    fill=style["band_text"],
+                    anchor="lm",
+                )
+
+        draw.line(
+            (_s(48), _s(height - 52), _s(width - 48), _s(height - 52)),
+            fill=style["divider"],
             width=_s(1),
         )
-        row_center = y + _s(row_h) / 2
-        time_text = str(row.get("time") or "")
+        footer_color = _contrast_text(
+            image,
+            (0, _s(height - footer_h), _s(width), _s(height)),
+            style["footer"],
+            style["footer_on_dark"],
+        )
         draw.text(
-            (_s(52), row_center),
-            _ellipsize(draw, time_text, _font(bold, _s(19)), _s(180)),
-            font=_font(bold, _s(19)),
-            fill=style["time"],
-            anchor="lm",
+            (_s(48), _s(height - 40)),
+            footer_note,
+            font=_font(regular, _s(14)),
+            fill=footer_color,
         )
-        place = str(row.get("place") or "")
-        block = [
-            (str(row.get("name") or ""), _font(bold, _s(23)), style["name"], _s(width - 420)),
-        ]
-        if place:
-            block.append((place, _font(regular, _s(15)), style["sub"], _s(width - 300)))
-        _draw_text_block(draw, _s(250), row_center, block, gap=_s(4))
-
-        marks = str(row.get("marks") or "")
-        if marks:
-            fg, bg = mark_style.get(str(row.get("mark_kind") or ""), (style["time"], style["outline"]))
-            chip_font = _font(bold, _s(16))
-            chip_w = chip_font.getlength(marks) + _s(26)
-            chip_x = _s(width - 44) - chip_w
-            chip_y = row_center - _s(16)
-            draw.rounded_rectangle(
-                (chip_x, chip_y, chip_x + chip_w, chip_y + _s(32)),
-                radius=_s(16),
-                fill=bg,
-            )
+        if len(chunks) > 1:
             draw.text(
-                (chip_x + _s(13), chip_y + _s(16)),
-                marks,
-                font=chip_font,
-                fill=fg,
-                anchor="lm",
+                (_s(width - 48), _s(height - 40)),
+                f"{page_no} / {len(chunks)}",
+                font=_font(bold, _s(14)),
+                fill=footer_color,
+                anchor="ra",
             )
-        y += _s(row_h + gap)
 
-    if note_lines:
-        draw.rounded_rectangle(
-            (_s(28), y, _s(width - 28), y + _s(note_h - 8)),
-            radius=_s(14),
-            fill=style["band_fill"],
+        path = _save_card(
+            image,
+            overlay,
+            day_dir / f"{file_prefix}-{stamp}-{page_no}.png",
+            width=width,
+            height=height,
+            background=bool(background),
+            quality=image_quality,
         )
-        line_font = _font(bold, _s(17))
-        for index, line in enumerate(note_lines):
-            draw.text(
-                (_s(48), y + _s(10 + 26 * index + 13)),
-                _ellipsize(draw, line, line_font, _s(width - 120)),
-                font=line_font,
-                fill=style["band_text"],
-                anchor="lm",
-            )
-        y += _s(note_h)
+        paths.append(path)
 
-    draw.line(
-        (_s(48), _s(height - 52), _s(width - 48), _s(height - 52)),
-        fill=style["divider"],
-        width=_s(1),
-    )
-    footer_color = _contrast_text(image, (0, _s(height - footer_h), _s(width), _s(height)), style["footer"], style["footer_on_dark"])
-    draw.text(
-        (_s(48), _s(height - 40)),
-        footer_note,
-        font=_font(regular, _s(14)),
-        fill=footer_color,
-    )
-
-    path = _save_card(
-        image,
-        overlay,
-        day_dir / f"day-{time.strftime('%Y%m%d%H%M%S')}.png",
-        width=width,
-        height=height,
-        background=bool(background),
-        quality=image_quality,
-    )
-    return [path]
+    return paths

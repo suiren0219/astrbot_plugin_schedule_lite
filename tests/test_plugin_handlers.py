@@ -1375,6 +1375,56 @@ def test_query_image_gets_tomorrow_hint(image_plugin):
     assert "明天早八" in captured.get("note", "")
 
 
+def test_query_day_card_shows_full_day_and_highlights(image_plugin):
+    """日卡双列展示全天课程，并按当前时间高亮进行中/下一节。"""
+    import main as plugin_main
+
+    from schedule_lite_core import render
+    from schedule_lite_core.model import Course, Timetable
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+
+    event = _Event("/课表 导入")
+    today = image_plugin._now().date()
+    weeks = list(range(1, 21))
+    tt = Timetable(
+        owner_id="10001",
+        owner_name="张三",
+        term_start="2026-08-31",
+        total_weeks=20,
+        courses=[
+            Course(name="已上完的课", day=today.isoweekday(), weeks=weeks, start="08:00", end="09:40"),
+            Course(name="正在上的课", day=today.isoweekday(), weeks=weeks, start="10:00", end="11:40"),
+            Course(name="待上的课", day=today.isoweekday(), weeks=weeks, start="14:00", end="15:40"),
+        ],
+    )
+    image_plugin.store.put("test:10001", tt)
+    _force_now(image_plugin, 10, 30)  # 第二节在上，第三节是下一节
+
+    captured = {}
+    real = plugin_main.render_mod.render_day_card
+
+    def spy_render(rows, out_dir, **kwargs):
+        captured["rows"] = rows
+        return real(rows, out_dir, **kwargs)
+
+    plugin_main.render_mod.render_day_card = spy_render
+    try:
+        out = asyncio.run(_collect(image_plugin._h_query(event, "")))
+    finally:
+        plugin_main.render_mod.render_day_card = real
+
+    assert out == [], "图片发送成功时不应再发文字"
+    assert event.sent
+    rows = captured["rows"]
+    assert [r["name"] for r in rows] == ["已上完的课", "正在上的课", "待上的课"]
+    highlights = {r["name"]: r["highlight"] for r in rows}
+    assert highlights["正在上的课"] == "now"
+    assert highlights["待上的课"] == "next"
+    assert highlights["已上完的课"] == ""
+
+
 def test_query_falls_back_to_text(plugin):
     """关闭开关时保持原来的文字查询。"""
     event = _Event("/课表 导入")
@@ -2376,6 +2426,7 @@ def test_early_push_skips_abandoned_and_holiday(tmp_path):
             "early_time": "21:30",
             "early_max_start": "08:00",
             "early_at": False,
+            "early_image": False,
             "showcase_enabled": False,
             "recap_enabled": False,
         },
@@ -2446,6 +2497,7 @@ def test_early_push_tomorrow_early_birds(tmp_path):
             "early_time": "21:30",
             "early_max_start": "08:00",
             "early_at": True,
+            "early_image": False,
             "showcase_enabled": False,
             "recap_enabled": False,
         },
@@ -2477,6 +2529,67 @@ def test_early_push_tomorrow_early_birds(tmp_path):
 
     asyncio.run(plugin._check_scheduled_broadcasts(now21))
     assert len(ctx.sent) == 1
+
+
+def test_early_push_sends_grid_image(tmp_path):
+    """早八推送默认发一张双列卡片，不发文字名单。"""
+    import main as plugin_main
+    from datetime import timedelta
+
+    from schedule_lite_core import render
+    from schedule_lite_core.model import Course, Timetable
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+
+    class _Ctx:
+        def __init__(self):
+            self.sent = []
+
+        async def send_message(self, origin, chain):
+            self.sent.append((origin, chain))
+
+    plugin_main.StarTools._dir = tmp_path
+    ctx = _Ctx()
+    plugin = plugin_main.ScheduleLitePlugin(
+        ctx,
+        {
+            "early_enabled": True,
+            "early_time": "21:30",
+            "early_max_start": "08:00",
+            "early_at": False,
+            "showcase_enabled": False,
+            "recap_enabled": False,
+        },
+    )
+    now = plugin._now()
+    tomorrow = now.date() + timedelta(days=1)
+    monday = now.date() - timedelta(days=now.isoweekday() - 1)
+
+    def make_tt(uid, name, start):
+        return Timetable(
+            owner_id=uid,
+            owner_name=name,
+            term_start=monday.isoformat(),
+            total_weeks=20,
+            courses=[Course(name=f"课{uid}", day=tomorrow.isoweekday(), weeks=[1, 2], start=start, end="09:40")],
+            groups=["g1"],
+            group_origins={"g1": "test:group:g1"},
+        )
+
+    plugin.store.put("t:1", make_tt("1", "早八同学", "08:00"))
+    plugin.store.put("t:2", make_tt("2", "七点半同学", "07:30"))
+
+    now21 = now.replace(hour=21, minute=31, second=0, microsecond=0)
+    asyncio.run(plugin._check_scheduled_broadcasts(now21))
+    assert len(ctx.sent) == 1
+    chain = ctx.sent[0][1].chain
+    images = [c for c in chain if c.__class__.__name__ == "Image"]
+    assert images, "应发送图片组件而不是文字"
+    for comp in images:
+        assert Path(str(getattr(comp, "file", ""))).exists()
+    cards = list((tmp_path / "cache" / "grid").glob("*/grid-*.png"))
+    assert cards, "网格卡片应落盘缓存目录"
 
 
 def test_group_index_cached_and_invalidated(plugin):
