@@ -294,6 +294,7 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 | `image_background` | 空 | 卡片背景图路径；控制台上传后自动填 `assets/background.png` |
 | `image_background_dim` | 55 | 背景淡化程度，0 接近原图、90 几乎纯白 |
 | `image_dark` | false | 图片深色模式：深色底、浅色字，配深色背景更和谐 |
+| `image_scrim` | 45 | 深色模式下背景图上叠加的深色遮罩强度，0 不加 |
 | `image_quality` | 85 | 带背景图的卡片用 JPEG 发送时的质量，越低越省流量 |
 | `image_width` | 900 | 渲染图片宽度（像素） |
 | `font_path` | 空 | 自定义中文字体路径（Linux 常用） |

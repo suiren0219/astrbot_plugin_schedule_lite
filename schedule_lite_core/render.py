@@ -476,6 +476,7 @@ def _new_page(
     background: str = "",
     background_dim: int = 55,
     dark: bool = False,
+    scrim: int = 45,
 ) -> tuple[Any, Any, Any]:
     """创建画布，返回 (底图, 覆盖层, draw)。
 
@@ -492,13 +493,14 @@ def _new_page(
         except (TypeError, ValueError):
             dim = 55
         if dark:
-            # 深色模式用遮罩：先压暗再叠深色层，背景保留轮廓但整体沉稳
+            # 深色模式用遮罩：先按淡化程度压暗，再叠独立强度的深色遮罩
             from PIL import ImageEnhance
 
             factor = max(1 - dim / 100 * 0.6, 0.25)
             base = ImageEnhance.Brightness(base).enhance(factor).convert("RGBA")
-            scrim = Image.new("RGBA", size, (8, 12, 24) + (int(dim / 100 * 130),))
-            base = Image.alpha_composite(base, scrim)
+            alpha = max(0, min(int(scrim), 100)) / 100 * 180
+            mask = Image.new("RGBA", size, (8, 12, 24, int(alpha)))
+            base = Image.alpha_composite(base, mask)
         else:
             veil = Image.new("RGBA", size, (255, 255, 255) + (int(dim / 100 * 235),))
             base = Image.alpha_composite(base, veil)
@@ -851,6 +853,7 @@ def render_everyone(
     background_dim: int = 55,
     dark: bool = False,
     image_quality: int = 85,
+    scrim: int = 45,
 ) -> list[Path]:
     if not available(font_path):
         return []
@@ -904,7 +907,9 @@ def render_everyone(
                 height += divider_h
             else:
                 height += chip_h + chip_gap
-        image, overlay, draw = _new_page(width, height, background, background_dim, dark)
+        image, overlay, draw = _new_page(
+            width, height, background, background_dim, dark, scrim
+        )
 
         draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
         head_color = _contrast_text(image, (0, 0, _s(width), _s(150)))
@@ -1113,6 +1118,7 @@ def render_day_card(
     background_dim: int = 55,
     dark: bool = False,
     image_quality: int = 85,
+    scrim: int = 45,
 ) -> list[Path]:
     """渲染单日课表卡片。
 
@@ -1134,7 +1140,9 @@ def render_day_card(
     note_h = (16 + 26 * len(note_lines)) if note_lines else 0
     count = max(len(rows), 1)
     height = header_h + count * (row_h + gap) - gap + note_h + footer_h
-    image, overlay, draw = _new_page(width, height, background, background_dim, dark)
+    image, overlay, draw = _new_page(
+        width, height, background, background_dim, dark, scrim
+    )
 
     draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
     head_box = (0, 0, _s(width), _s(header_h))
