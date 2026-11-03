@@ -246,7 +246,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.5.26",
+    "v1.5.27",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -469,9 +469,10 @@ class ScheduleLitePlugin(Star):
     def _avatar_sources(qq: str) -> list[str]:
         return [
             f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=640",
-            f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100",
+            f"https://thirdqq.qlogo.cn/g?b=qq&nk={qq}&s=640",
             f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec=640",
-            f"https://q.qlogo.cn/headimg_dl?dst_uin={qq}&spec=100",
+            f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100",
+            f"https://thirdqq.qlogo.cn/g?b=qq&nk={qq}&s=100",
         ]
 
     async def _avatar_paths(self, timetables) -> dict[str, str]:
@@ -551,26 +552,33 @@ class ScheduleLitePlugin(Star):
             return await asyncio.to_thread(save)
 
         async def fetch(owner_id: str, qq: str, path: Path):
+            tried: set[str] = set()
             async with semaphore:
-                timeout = aiohttp.ClientTimeout(total=5)
-                for url in self._avatar_sources(qq):
-                    try:
-                        async with self._http.get(
-                            url, headers=headers, timeout=timeout
-                        ) as resp:
-                            if resp.status != 200:
-                                continue
-                            data = await resp.read()
-                        if len(data) < 512:
+                timeout = aiohttp.ClientTimeout(total=8)
+                for round_no in range(2):
+                    if round_no:
+                        await asyncio.sleep(1.5)  # 失败后稍等再重试一轮
+                    for url in self._avatar_sources(qq):
+                        if round_no and url in tried:
                             continue
-                        if await normalize(data, path):
-                            paths[owner_id] = str(path)
-                            return
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug(f"[{PLUGIN_NAME}] 获取头像 {qq} 失败: {e}")
+                        tried.add(url)
+                        try:
+                            async with self._http.get(
+                                url, headers=headers, timeout=timeout
+                            ) as resp:
+                                if resp.status != 200:
+                                    continue
+                                data = await resp.read()
+                            if len(data) < 512:
+                                continue
+                            if await normalize(data, path):
+                                paths[owner_id] = str(path)
+                                return
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug(f"[{PLUGIN_NAME}] 获取头像 {qq} 失败: {e}")
 
         tasks = [asyncio.create_task(fetch(*item)) for item in pending]
-        _, still_running = await asyncio.wait(tasks, timeout=8)
+        _, still_running = await asyncio.wait(tasks, timeout=12)
         for task in still_running:
             task.cancel()
         if still_running:
