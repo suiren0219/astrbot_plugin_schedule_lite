@@ -1683,12 +1683,76 @@ def test_broadcast_claim_released_on_failure(tmp_path):
     plugin.store.put("test:1", tt)
     now = plugin._now().replace(hour=22, minute=31, second=0, microsecond=0)
 
-    asyncio.run(plugin._check_scheduled_broadcasts(now))
-    assert ctx.calls == 1
-    assert plugin._broadcast_state.get("showcase", {}) == {}
-
+    # 第 1 轮：图片失败 → 文字兜底再试一次；失败 1 次 < 3，名额退回待重试
     asyncio.run(plugin._check_scheduled_broadcasts(now))
     assert ctx.calls == 2
+    assert plugin._broadcast_failures["showcase"]["g1"][1] == 1
+    assert plugin._broadcast_state.get("showcase", {}).get("g1") is None
+
+    # 第 2 轮：继续失败，计数 2
+    asyncio.run(plugin._check_scheduled_broadcasts(now))
+    assert ctx.calls == 4
+    assert plugin._broadcast_failures["showcase"]["g1"][1] == 2
+
+    # 第 3 轮：达到 3 次，名额保留，当天不再重试
+    asyncio.run(plugin._check_scheduled_broadcasts(now))
+    assert ctx.calls == 6
+    assert plugin._broadcast_failures["showcase"]["g1"][1] == 3
+    assert plugin._broadcast_state.get("showcase", {}).get("g1") == now.date().isoformat()
+
+    # 第 4 轮：不再调用发送
+    asyncio.run(plugin._check_scheduled_broadcasts(now))
+    assert ctx.calls == 6
+
+
+def test_broadcast_failures_reset_next_day(tmp_path):
+    """换天失败计数清零，新的一天还能正常补发。"""
+    import main as plugin_main
+    from datetime import timedelta
+    from schedule_lite_core.model import Course, Timetable
+
+    class _Context:
+        def __init__(self):
+            self.fail = True
+            self.calls = 0
+
+        async def send_message(self, origin, chain):
+            self.calls += 1
+            if self.fail:
+                raise RuntimeError("send failed")
+
+    plugin_main.StarTools._dir = tmp_path
+    ctx = _Context()
+    plugin = plugin_main.ScheduleLitePlugin(
+        ctx,
+        {"showcase_enabled": True, "showcase_time": "22:30", "showcase_min_minutes": 60, "showcase_min_users": 1},
+    )
+    today = plugin._now().date()
+    next_day = today + timedelta(days=1)
+    tt = Timetable(
+        owner_id="1", owner_name="甲",
+        term_start=(today - timedelta(days=today.isoweekday() - 1)).isoformat(),
+        total_weeks=20,
+        courses=[
+            Course(name="课", day=today.isoweekday(), weeks=[1], start="08:00", end="14:00"),
+            Course(name="课", day=next_day.isoweekday(), weeks=[1], start="08:00", end="14:00"),
+        ],
+        groups=["g1"], group_origins={"g1": "test:group:g1"},
+    )
+    plugin.store.put("test:1", tt)
+    now = plugin._now().replace(hour=22, minute=31, second=0, microsecond=0)
+    for _ in range(4):
+        asyncio.run(plugin._check_scheduled_broadcasts(now))
+    assert plugin._broadcast_failures["showcase"]["g1"][1] >= 3
+    assert plugin._broadcast_state.get("showcase", {}).get("g1") == now.date().isoformat()  # 放弃后名额保留
+
+    # 换天计数清零
+    next_day = (now + timedelta(days=1)).date()
+    ctx.fail = False
+    next_moment = now.replace(day=next_day.day, month=next_day.month)
+    asyncio.run(plugin._check_scheduled_broadcasts(next_moment))
+    assert ctx.calls > 0
+    assert plugin._broadcast_state.get("showcase", {}).get("g1") == next_day.isoformat()
 
 
 def test_web_api_save_records(plugin):
