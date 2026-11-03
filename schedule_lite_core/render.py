@@ -413,11 +413,35 @@ def _contrast_text(image: Any, box: tuple[int, int, int, int], dark: str = "#0F1
     return dark if mean >= 160 else light
 
 
+def _save_card(
+    image: Any,
+    overlay: Any,
+    path: Path,
+    *,
+    width: int,
+    height: int,
+    background: bool,
+    quality: int = 85,
+) -> Path:
+    """合成图层后落盘：带照片背景的卡片用 JPEG 压体积，纯文字卡用 PNG 保锐度。"""
+    merged = Image.alpha_composite(image, overlay).convert("RGB")
+    if background:
+        quality = max(50, min(int(quality), 95))
+        path = path.with_suffix(".jpg")
+        merged.resize((width, height), Image.LANCZOS).save(
+            path, "JPEG", quality=quality, optimize=True
+        )
+    else:
+        merged.resize((width, height), Image.LANCZOS).save(path, "PNG", optimize=True)
+    return path
+
+
 def _new_page(
     width: int,
     height: int,
     background: str = "",
     background_dim: int = 55,
+    dark: bool = False,
 ) -> tuple[Any, Any, Any]:
     """创建画布，返回 (底图, 覆盖层, draw)。
 
@@ -426,14 +450,15 @@ def _new_page(
     size = (_s(width), _s(height))
     bg = _load_background(background, width, height)
     if bg is None:
-        base = Image.new("RGBA", size, "#FFFFFF")
+        base = Image.new("RGBA", size, "#0F172A" if dark else "#FFFFFF")
     else:
         base = bg.convert("RGBA")
         try:
             dim = max(0, min(int(background_dim), 90))
         except (TypeError, ValueError):
             dim = 55
-        veil = Image.new("RGBA", size, (255, 255, 255, int(dim / 100 * 235)))
+        veil_color = (15, 23, 42) if dark else (255, 255, 255)
+        veil = Image.new("RGBA", size, veil_color + (int(dim / 100 * 235),))
         base = Image.alpha_composite(base, veil)
     overlay = Image.new("RGBA", size, (0, 0, 0, 0))
     return base, overlay, ImageDraw.Draw(overlay)
@@ -671,7 +696,7 @@ def _avatar_color(name: str) -> str:
 
 
 def _draw_avatar(
-    image: Any,
+    overlay: Any,
     draw: Any,
     cx: float,
     cy: float,
@@ -694,7 +719,7 @@ def _draw_avatar(
                 ImageDraw.Draw(mask).ellipse(
                     (0, 0, diameter - 1, diameter - 1), fill=255
                 )
-                image.paste(avatar, (int(cx - radius), int(cy - radius)), mask)
+                overlay.paste(avatar, (int(cx - radius), int(cy - radius)), mask)
             return True
         except Exception:  # noqa: BLE001
             pass
@@ -746,6 +771,8 @@ def render_everyone(
     font_path: str = "",
     background: str = "",
     background_dim: int = 55,
+    dark: bool = False,
+    image_quality: int = 85,
 ) -> list[Path]:
     if not available(font_path):
         return []
@@ -782,6 +809,8 @@ def render_everyone(
     if current:
         pages.append(current)
 
+    style = CARD_STYLE[dark]
+    status_style = STATUS_STYLE_DARK if dark else STATUS_STYLE
     stamp = time.strftime("%Y%m%d%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
     paths: list[Path] = []
     row_h, row_gap = 96, 10
@@ -797,12 +826,12 @@ def render_everyone(
                 height += divider_h
             else:
                 height += chip_h + chip_gap
-        image, overlay, draw = _new_page(width, height, background, background_dim)
+        image, overlay, draw = _new_page(width, height, background, background_dim, dark)
 
         draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
         head_color = _contrast_text(image, (0, 0, _s(width), _s(150)))
-        sub_color = "#64748B" if head_color == "#0F172A" else "#E2E8F0"
-        brand_color = "#2563EB" if head_color == "#0F172A" else "#BFDBFE"
+        sub_color = style["subtitle"] if head_color == style["title"] else style["subtitle_on_dark"]
+        brand_color = style["brand"] if head_color == style["title"] else style["brand_dark_bg"]
         draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
         draw.text((_s(48), _s(58)), title, font=_font(bold, _s(36)), fill=head_color)
         if subtitle:
@@ -813,19 +842,19 @@ def render_everyone(
             if kind == "row":
                 entry = payload
                 status_type = int(entry.get("type", 5))
-                fg, bg = STATUS_STYLE.get(status_type, STATUS_STYLE[5])
+                fg, bg = status_style.get(status_type, status_style[5])
                 draw.rounded_rectangle(
                     (_s(28), y, _s(width - 28), y + _s(row_h)),
                     radius=_s(16),
-                    fill=(248, 250, 252, 238),
-                    outline=(226, 232, 240, 255),
+                    fill=style["surface"],
+                    outline=style["outline"],
                     width=_s(1),
                 )
                 cx, cy = _s(76), y + _s(row_h // 2)
-                _draw_avatar(image, draw, cx, cy, _s(28), str(entry.get("avatar") or ""), entry.get("name", ""))
+                _draw_avatar(overlay, draw, cx, cy, _s(28), str(entry.get("avatar") or ""), entry.get("name", ""))
 
                 name = _ellipsize(draw, entry.get("name", ""), _font(bold, _s(23)), _s(430))
-                draw.text((_s(122), y + _s(16)), name, font=_font(bold, _s(23)), fill="#0F172A")
+                draw.text((_s(122), y + _s(16)), name, font=_font(bold, _s(23)), fill=style["name"])
 
                 label = entry.get("label", "")
                 chip_font = _font(bold, _s(17))
@@ -840,13 +869,13 @@ def render_everyone(
                 draw.text((chip_x + _s(14), y + _s(21)), label, font=chip_font, fill=fg)
 
                 main = _ellipsize(draw, entry.get("main", ""), _font(regular, _s(21)), _s(width - 122 - 44))
-                draw.text((_s(122), y + _s(50)), main, font=_font(regular, _s(21)), fill="#334155")
+                draw.text((_s(122), y + _s(50)), main, font=_font(regular, _s(21)), fill=style["main"])
 
                 sub = _ellipsize(draw, entry.get("sub", ""), _font(regular, _s(17)), _s(width - 122 - 44))
-                draw.text((_s(122), y + _s(78 - _s(0))), sub, font=_font(regular, _s(17)), fill="#94A3B8")
+                draw.text((_s(122), y + _s(78 - _s(0))), sub, font=_font(regular, _s(17)), fill=style["sub"])
                 y += _s(row_h + row_gap)
             elif kind == "divider":
-                draw.text((_s(48), y + _s(4)), str(payload), font=_font(bold, _s(18)), fill="#64748B")
+                draw.text((_s(48), y + _s(4)), str(payload), font=_font(bold, _s(18)), fill=style["muted"])
                 y += _s(divider_h)
             else:
                 chip_w = (width - 56 - 2 * 10) / 3
@@ -855,19 +884,19 @@ def render_everyone(
                     draw.rounded_rectangle(
                         (_s(x), y, _s(x + chip_w), y + _s(chip_h)),
                         radius=_s(12),
-                        fill=(248, 250, 252, 238),
-                        outline=(226, 232, 240, 255),
+                        fill=style["surface"],
+                        outline=style["outline"],
                         width=_s(1),
                     )
                     _draw_avatar(
-                        image, draw,
+                        overlay, draw,
                         _s(x + 26), y + _s(chip_h // 2), _s(16),
                         str(entry.get("avatar") or ""), entry.get("name", ""),
                     )
                     name_x = x + 52
                     name_w = chip_w - 52 - 10
                     name = _ellipsize(draw, entry.get("name", ""), _font(bold, _s(16)), _s(name_w))
-                    draw.text((_s(name_x), y + _s(9)), name, font=_font(bold, _s(16)), fill="#0F172A")
+                    draw.text((_s(name_x), y + _s(9)), name, font=_font(bold, _s(16)), fill=style["name"])
                     hours = entry.get("hours")
                     note = f"{hours:.1f} 小时" if isinstance(hours, (int, float)) else "无课"
                     note = _ellipsize(draw, note, _font(regular, _s(12)), _s(name_w))
@@ -891,10 +920,15 @@ def render_everyone(
                 fill=footer_color,
             )
 
-        path = day_dir / f"everyone-{stamp}-{page_no}.png"
-        Image.alpha_composite(image, overlay).convert("RGB").resize(
-            (width, height), Image.LANCZOS
-        ).save(path, "PNG", optimize=True)
+        path = _save_card(
+            image,
+            overlay,
+            day_dir / f"everyone-{stamp}-{page_no}.png",
+            width=width,
+            height=height,
+            background=bool(background),
+            quality=image_quality,
+        )
         paths.append(path)
 
     return paths
@@ -906,6 +940,61 @@ MARK_STYLE = {
     "skip": ("#B45309", "#FEF3C7"),   # 翘课
     "leave": ("#1D4ED8", "#DBEAFE"),  # 请假
     "moved": ("#6D28D9", "#EDE9FE"),  # 调课
+}
+
+# 状态徽章的深色配色（半透明底 + 亮字）
+STATUS_STYLE_DARK = {
+    0: ("#C4B5FD", (124, 58, 237, 90)),    # 分身中
+    1: ("#6EE7B7", (4, 120, 87, 110)),     # 进行中
+    2: ("#FCD34D", (180, 83, 9, 110)),     # 翘课中
+    3: ("#93C5FD", (29, 78, 216, 110)),    # 下一节
+    4: ("#CBD5E1", (100, 116, 139, 110)),  # 已结束
+    5: ("#94A3B8", (71, 85, 105, 110)),    # 无课程
+    6: ("#93C5FD", (59, 130, 246, 110)),   # 请假中
+}
+
+# 卡片整体配色：light / dark
+CARD_STYLE = {
+    False: {
+        "surface": (248, 250, 252, 238),
+        "outline": (226, 232, 240, 255),
+        "name": "#0F172A",
+        "main": "#334155",
+        "sub": "#94A3B8",
+        "time": "#475569",
+        "muted": "#64748B",
+        "divider": (226, 232, 240, 255),
+        "band_fill": (37, 99, 235, 30),
+        "band_text": "#1D4ED8",
+        "brand": "#2563EB",
+        "brand_dark_bg": "#BFDBFE",
+        "title": "#0F172A",
+        "subtitle": "#64748B",
+        "subtitle_on_dark": "#E2E8F0",
+        "footer": "#94A3B8",
+        "footer_on_dark": "#E2E8F0",
+        "empty": "#64748B",
+    },
+    True: {
+        "surface": (30, 41, 59, 235),
+        "outline": (51, 65, 85, 255),
+        "name": "#F8FAFC",
+        "main": "#CBD5E1",
+        "sub": "#94A3B8",
+        "time": "#94A3B8",
+        "muted": "#94A3B8",
+        "divider": (51, 65, 85, 255),
+        "band_fill": (59, 130, 246, 80),
+        "band_text": "#DBEAFE",
+        "brand": "#93C5FD",
+        "brand_dark_bg": "#93C5FD",
+        "title": "#F8FAFC",
+        "subtitle": "#94A3B8",
+        "subtitle_on_dark": "#94A3B8",
+        "footer": "#94A3B8",
+        "footer_on_dark": "#94A3B8",
+        "empty": "#94A3B8",
+    },
 }
 
 
@@ -922,6 +1011,8 @@ def render_day_card(
     font_path: str = "",
     background: str = "",
     background_dim: int = 55,
+    dark: bool = False,
+    image_quality: int = 85,
 ) -> list[Path]:
     """渲染单日课表卡片。
 
@@ -936,21 +1027,19 @@ def render_day_card(
     day_dir.mkdir(parents=True, exist_ok=True)
     _prune_day_dirs(out, day_dir.name, keep=3)
 
+    style = CARD_STYLE[dark]
+    mark_style = STATUS_STYLE_DARK if dark else MARK_STYLE
     row_h, gap, header_h, footer_h = 76, 10, 150, 64
     note_h = 56 if next_note else 0
     count = max(len(rows), 1)
     height = header_h + count * (row_h + gap) - gap + note_h + footer_h
-    image, overlay, draw = _new_page(width, height, background, background_dim)
+    image, overlay, draw = _new_page(width, height, background, background_dim, dark)
 
     draw.rectangle((0, 0, _s(width), _s(8)), fill="#2563EB")
     head_box = (0, 0, _s(width), _s(header_h))
     title_color = _contrast_text(image, head_box)
-    sub_color = (
-        "#64748B"
-        if title_color == "#0F172A"
-        else "#E2E8F0"
-    )
-    brand_color = "#2563EB" if title_color == "#0F172A" else "#BFDBFE"
+    sub_color = style["subtitle"] if title_color == style["title"] else style["subtitle_on_dark"]
+    brand_color = style["brand"] if title_color == style["title"] else style["brand_dark_bg"]
     draw.text((_s(48), _s(34)), "SCHEDULE LITE", font=_font(bold, _s(15)), fill=brand_color)
     draw.text((_s(48), _s(58)), title, font=_font(bold, _s(36)), fill=title_color)
     if subtitle:
@@ -962,15 +1051,15 @@ def render_day_card(
             (_s(52), y + _s(12)),
             empty_text,
             font=_font(regular, _s(22)),
-            fill="#64748B",
+            fill=style["empty"],
         )
         y += _s(row_h + gap)
     for row in rows:
         draw.rounded_rectangle(
             (_s(28), y, _s(width - 28), y + _s(row_h)),
             radius=_s(16),
-            fill=(248, 250, 252, 238),
-            outline=(226, 232, 240, 255),
+            fill=style["surface"],
+            outline=style["outline"],
             width=_s(1),
         )
         time_text = str(row.get("time") or "")
@@ -978,7 +1067,7 @@ def render_day_card(
             (_s(52), y + _s(16)),
             time_text,
             font=_font(bold, _s(19)),
-            fill="#475569",
+            fill=style["time"],
         )
         name = _ellipsize(
             draw,
@@ -986,15 +1075,15 @@ def render_day_card(
             _font(bold, _s(23)),
             _s(width - 420),
         )
-        draw.text((_s(250), y + _s(13)), name, font=_font(bold, _s(23)), fill="#0F172A")
+        draw.text((_s(250), y + _s(13)), name, font=_font(bold, _s(23)), fill=style["name"])
         place = str(row.get("place") or "")
         if place:
             place = _ellipsize(draw, place, _font(regular, _s(15)), _s(width - 300))
-            draw.text((_s(250), y + _s(45)), place, font=_font(regular, _s(15)), fill="#94A3B8")
+            draw.text((_s(250), y + _s(45)), place, font=_font(regular, _s(15)), fill=style["sub"])
 
         marks = str(row.get("marks") or "")
         if marks:
-            fg, bg = MARK_STYLE.get(str(row.get("mark_kind") or ""), ("#475569", "#E2E8F0"))
+            fg, bg = mark_style.get(str(row.get("mark_kind") or ""), (style["time"], style["outline"]))
             chip_font = _font(bold, _s(16))
             chip_w = chip_font.getlength(marks) + _s(26)
             chip_x = _s(width - 44) - chip_w
@@ -1010,22 +1099,22 @@ def render_day_card(
         draw.rounded_rectangle(
             (_s(28), y, _s(width - 28), y + _s(48)),
             radius=_s(14),
-            fill=(37, 99, 235, 30),
+            fill=style["band_fill"],
         )
         draw.text(
             (_s(48), y + _s(12)),
             _ellipsize(draw, next_note, _font(bold, _s(19)), _s(width - 120)),
             font=_font(bold, _s(19)),
-            fill="#1D4ED8",
+            fill=style["band_text"],
         )
         y += _s(note_h)
 
     draw.line(
         (_s(48), _s(height - 52), _s(width - 48), _s(height - 52)),
-        fill=(226, 232, 240, 255),
+        fill=style["divider"],
         width=_s(1),
     )
-    footer_color = _contrast_text(image, (0, _s(height - footer_h), _s(width), _s(height)), "#94A3B8", "#E2E8F0")
+    footer_color = _contrast_text(image, (0, _s(height - footer_h), _s(width), _s(height)), style["footer"], style["footer_on_dark"])
     draw.text(
         (_s(48), _s(height - 40)),
         footer_note,
@@ -1033,8 +1122,13 @@ def render_day_card(
         fill=footer_color,
     )
 
-    path = day_dir / f"day-{time.strftime('%Y%m%d%H%M%S')}.png"
-    Image.alpha_composite(image, overlay).convert("RGB").resize(
-        (width, height), Image.LANCZOS
-    ).save(path, "PNG", optimize=True)
+    path = _save_card(
+        image,
+        overlay,
+        day_dir / f"day-{time.strftime('%Y%m%d%H%M%S')}.png",
+        width=width,
+        height=height,
+        background=bool(background),
+        quality=image_quality,
+    )
     return [path]

@@ -1417,6 +1417,67 @@ def test_render_day_card_with_background(tmp_path):
     assert len(paths) == 1 and paths[0].is_file()
 
 
+def test_avatar_visible_over_faded_background(image_plugin, tmp_path):
+    """背景淡化后头像不能再被半透明行卡片盖住（图层合成回归）。"""
+    from PIL import Image
+
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    avatar = tmp_path / "avatar.png"
+    Image.new("RGB", (200, 200), (230, 120, 90)).save(avatar, "PNG")
+    bg = tmp_path / "bg.png"
+    Image.new("RGB", (800, 600), (30, 60, 120)).save(bg, "PNG")
+
+    paths = render.render_everyone(
+        [{"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": "",
+          "avatar": str(avatar)}],
+        tmp_path / "out",
+        background=str(bg),
+        background_dim=90,
+        width=900,
+        font_path="",
+    )
+    assert paths
+    image = Image.open(paths[0]).convert("RGB")
+    # 头像圆心在 (76, 150 + 96/2)，取中心像素应接近头像颜色而不是行底色
+    pixel = image.getpixel((76, 150 + 48))
+    assert abs(pixel[0] - 230) < 30 and abs(pixel[1] - 120) < 30 and abs(pixel[2] - 90) < 30
+
+
+def test_dark_mode_rendering(image_plugin, tmp_path):
+    """深色模式：卡片出深底浅字，带背景时同样可用。"""
+    from PIL import Image
+
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    entries = [
+        {"name": "张三", "type": 1, "label": "进行中", "main": "课", "sub": "", "avatar": ""},
+        {"name": "李四", "type": 4, "label": "已结束", "main": "下午课程已上完",
+         "sub": "共 3.2 小时", "avatar": "", "hours": 3.2},
+    ]
+    paths = render.render_everyone(
+        entries, tmp_path / "out-dark", dark=True, width=900, font_path=""
+    )
+    assert paths and paths[0].is_file()
+    image = Image.open(paths[0]).convert("RGB")
+    # 深色底：取行卡片左上角附近像素，应当偏暗
+    pixel = image.getpixel((40, 150 + 10))
+    assert sum(pixel[:3]) < 260
+
+    bg = tmp_path / "bg.png"
+    Image.new("RGB", (800, 600), (30, 60, 120)).save(bg, "PNG")
+    paths_bg = render.render_day_card(
+        [{"time": "08:00-09:40", "name": "高等数学", "place": "", "marks": "", "mark_kind": ""}],
+        tmp_path / "out-dark-day",
+        background=str(bg), background_dim=40, dark=True, width=900, font_path="",
+    )
+    assert paths_bg and paths_bg[0].is_file()
+
+
 def test_rank_sends_image(image_plugin, tmp_path):
     """排行默认发图片卡片，不再刷一屏文字。"""
     from schedule_lite_core import render
@@ -1476,6 +1537,71 @@ def test_rank_falls_back_to_text(plugin):
     out = asyncio.run(_collect(plugin._h_rank(event, "学期 全部")))
     assert out and "本学期课程时长榜" in out[0]
     assert "#1" in out[0]
+
+
+def test_rank_hides_inactive_members(plugin):
+    """3 天不发言同样从排行里剔除，发言后自动恢复。"""
+    first = _Event("/课表 导入", uid="10001", nick="张三", group="g1")
+    second = _Event("/课表 导入", uid="10002", nick="李四", group="g1")
+    _import_sample(plugin, first)
+    asyncio.run(_collect(plugin._h_import(second, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+
+    now = plugin._now().timestamp()
+    plugin._activity = {
+        "g1:10001": now,
+        "g1:10002": now - 4 * 86400,
+    }
+    out = asyncio.run(_collect(plugin._h_rank(first, "学期 全部")))
+    assert "张三" in out[0]
+    assert "李四" not in out[0]
+
+    # 再次发言 → 自动恢复
+    plugin._activity["g1:10002"] = now
+    back = asyncio.run(_collect(plugin._h_rank(first, "学期 全部")))
+    assert "李四" in back[0]
+
+    # 关掉过滤后重新出现
+    plugin._activity["g1:10002"] = now - 10 * 86400
+    plugin.config["everyone_active_days"] = 0
+    all_out = asyncio.run(_collect(plugin._h_rank(first, "学期 全部")))
+    assert "李四" in all_out[0]
+
+
+def test_card_compresses_to_jpeg_with_background(tmp_path):
+    """带背景图的卡片改用 JPEG；质量越低体积越小，纯文字卡仍用 PNG。"""
+    from PIL import Image
+
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    bg = tmp_path / "bg.png"
+    Image.effect_noise((900, 600), 64).convert("RGB").save(bg, "PNG")
+    rows = [{"time": "08:00-09:40", "name": "高等数学", "place": "", "marks": "", "mark_kind": ""}]
+
+    plain = render.render_day_card(rows, tmp_path / "plain", width=900, font_path="")
+    assert plain[0].suffix == ".png"
+
+    low = render.render_day_card(
+        rows, tmp_path / "low", width=900, font_path="",
+        background=str(bg), background_dim=30, image_quality=60,
+    )
+    high = render.render_day_card(
+        rows, tmp_path / "high", width=900, font_path="",
+        background=str(bg), background_dim=30, image_quality=95,
+    )
+    assert low[0].suffix == ".jpg" and high[0].suffix == ".jpg"
+    assert low[0].stat().st_size < high[0].stat().st_size
+    with Image.open(low[0]) as im:
+        assert im.format == "JPEG"
+
+    # 同一张照片背景，PNG 未压缩时体积更大（说明 JPEG 确实省带宽）
+    import io
+
+    with Image.open(low[0]) as im:
+        buf = io.BytesIO()
+        im.save(buf, "PNG", optimize=True)
+    assert low[0].stat().st_size < buf.tell()
 
 
 def test_rank_reverse_option(plugin):

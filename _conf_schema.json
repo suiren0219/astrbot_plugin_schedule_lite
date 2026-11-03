@@ -154,6 +154,23 @@
       "step": 5
     }
   },
+  "image_dark": {
+    "description": "🌙 图片深色模式",
+    "type": "bool",
+    "default": false,
+    "hint": "卡片用深色底、浅色字，配深色背景图更和谐。开自定义背景时会改用深色蒙层。"
+  },
+  "image_quality": {
+    "description": "🗜️ 背景图压缩质量",
+    "type": "int",
+    "default": 85,
+    "hint": "带背景图的卡片用 JPEG 发送时的质量，越低文件越小。50-95。纯白背景的卡片始终用 PNG。",
+    "slider": {
+      "min": 50,
+      "max": 95,
+      "step": 5
+    }
+  },
   "image_width": {
     "description": "📐 图片宽度（像素）",
     "type": "int",
