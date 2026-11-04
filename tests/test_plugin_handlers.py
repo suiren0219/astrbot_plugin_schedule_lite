@@ -1570,7 +1570,7 @@ def test_rank_sends_image(image_plugin, tmp_path):
         assert first.nodes
     else:
         assert Path(str(getattr(first, "file", ""))).exists()
-    day_dirs = list((tmp_path / "cache" / "rank").glob("*/everyone-*.png"))
+    day_dirs = list((tmp_path / "cache" / "rank").glob("*/rank-*.png"))
     assert day_dirs
 
 
@@ -1600,6 +1600,67 @@ def test_rank_card_keeps_avatars(image_plugin, tmp_path):
     asyncio.run(_collect(image_plugin._h_rank(event, "学期")))
     assert captured["rows"]
     assert captured["rows"][0]["avatar"].endswith("10001.png")
+
+
+def test_rank_image_appends_my_rank_row(image_plugin):
+    """自己的名次不在展示范围内时，卡片末尾单独追加高亮的「你」行，且仍是一页。"""
+    import main as plugin_main
+    from datetime import timedelta
+
+    from schedule_lite_core import render
+    from schedule_lite_core.model import Course, Timetable
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+
+    today = image_plugin._now().date()
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    weeks = list(range(1, 21))
+    for i in range(30):
+        tt = Timetable(
+            owner_id=f"2{i:03d}",
+            owner_name=f"同学{i + 1}",
+            term_start=monday.isoformat(),
+            total_weeks=20,
+            courses=[
+                Course(name="课", day=today.isoweekday(), weeks=weeks, start="08:00", end="09:40")
+            ],
+            groups=["g1"],
+            group_origins={"g1": "test:group:g1"},
+        )
+        image_plugin.store.put(f"test:2{i:03d}", tt)
+    me = Timetable(
+        owner_id="10001",
+        owner_name="皮卡丘",
+        term_start=monday.isoformat(),
+        total_weeks=20,
+        courses=[
+            Course(name="课", day=today.isoweekday(), weeks=weeks, start="10:00", end="10:40")
+        ],
+        groups=["g1"],
+        group_origins={"g1": "test:group:g1"},
+    )
+    image_plugin.store.put("test:10001", me)
+    event = _Event("/课表 排行 今日", uid="10001", nick="皮卡丘", group="g1")
+
+    captured = {}
+    real = plugin_main.render_mod.render_grid_card
+
+    def spy(rows, out_dir, **kwargs):
+        captured["rows"] = rows
+        return real(rows, out_dir, **kwargs)
+
+    plugin_main.render_mod.render_grid_card = spy
+    try:
+        asyncio.run(_collect(image_plugin._h_rank(event, "今日")))
+    finally:
+        plugin_main.render_mod.render_grid_card = real
+
+    rows = captured["rows"]
+    assert len(rows) == 28, "一页装满 27 名 + 自己那一行"
+    assert rows[-1]["highlight"] == "mine"
+    assert "你" in rows[-1]["name"]
+    assert rows[-1]["badge"] == "#31"
 
 
 def test_rank_falls_back_to_text(plugin):

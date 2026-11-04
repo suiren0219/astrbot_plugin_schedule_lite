@@ -617,11 +617,14 @@ def rank_rows(
     holiday=None,
     highlight_owner: str = "",
     reverse: bool = False,
+    limit: int | None = None,
 ) -> dict:
     """算出排行榜的结构化数据，文本与图片共用同一份名次。
 
     返回 {"mode", "rows", "hidden", "total", "mine", "reverse"}：
     rows 是裁剪后的展示行，mine 是请求者的完整名次（可能不在 rows 里）。
+    limit 给图片卡片用：指定展示行数（双列网格一页 28 行）；
+    不传时保持老规则——full 全量，否则前 9 名。
     """
     mode = mode if mode in RANK_MODE_LABEL else "week"
     entries = []
@@ -656,7 +659,10 @@ def rank_rows(
             {"rank": prev_rank, "shown": shown, "hours": hours, "timetable": tt}
         )
 
-    visible = ranked if full else ranked[:9]
+    if limit is not None:
+        visible = ranked[: max(int(limit), 1)]
+    else:
+        visible = ranked if full else ranked[:9]
     mine = next(
         (
             row
