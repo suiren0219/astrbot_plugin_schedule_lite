@@ -1514,8 +1514,8 @@ def test_avatar_visible_over_faded_background(image_plugin, tmp_path):
     )
     assert paths
     image = Image.open(paths[0]).convert("RGB")
-    # 头像圆心在 (76, 150 + 96/2)，取中心像素应接近头像颜色而不是行底色
-    pixel = image.getpixel((76, 150 + 48))
+    # 头像圆心在第一个格子 (28 + 32, 150 + 64/2)，中心像素应接近头像颜色而不是格子底色
+    pixel = image.getpixel((60, 150 + 32))
     assert abs(pixel[0] - 230) < 30 and abs(pixel[1] - 120) < 30 and abs(pixel[2] - 90) < 30
 
 
@@ -1709,14 +1709,22 @@ def test_card_text_blocks_fit_rows():
         pytest.skip("本机没有可用的中文字体")
     regular, bold = render._font_pair("")
     s = render._s
-    row_h = s(96)  # 字高按 2 倍画布量，行高也要换算到同一尺度
-    block = (
-        render._line_height(render._font(bold, s(23)))
-        + render._line_height(render._font(regular, s(21)))
-        + render._line_height(render._font(regular, s(17)))
-        + s(4) * 2
+    # 状态卡双列格子：名字 17 + 副行 13 + 行距 2，必须放得进 64px 格子
+    cell_h = s(64)
+    cell_block = (
+        render._line_height(render._font(bold, s(17)))
+        + render._line_height(render._font(regular, s(13)))
+        + s(2)
     )
-    assert block <= row_h - s(6), f"状态卡文本块 {block} 超出 {row_h} 行高"
+    assert cell_block <= cell_h - s(6), f"状态格文本块 {cell_block} 超出 {cell_h} 格高"
+
+    # 排行/早八网格：名字 19 + 副行 14，64px 格子
+    grid_block = (
+        render._line_height(render._font(bold, s(19)))
+        + render._line_height(render._font(regular, s(14)))
+        + s(2)
+    )
+    assert grid_block <= cell_h - s(6), f"网格文本块 {grid_block} 超出 {cell_h} 格高"
 
     day_row_h = s(76)
     day_block = (
@@ -2755,6 +2763,43 @@ def test_render_keeps_full_rows_for_key_states(image_plugin, tmp_path):
         font_path="",
     )
     assert len(paths) == 1
+
+
+def test_render_everyone_thirty_on_one_page(image_plugin, tmp_path):
+    """重点状态双列格：30 人全是重点状态也只出一张图；混合状态同样单页。"""
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+    key = [
+        {"name": f"同学{i}", "type": 1, "label": "进行中", "main": "高等数学", "sub": "08:00-09:40"}
+        for i in range(30)
+    ]
+    paths = render.render_everyone(
+        key, tmp_path / "out-key", page_size=8, width=900, font_path=""
+    )
+    assert len(paths) == 1, "30 个重点状态应挤进一张图"
+
+    mixed = key[:12]
+    mixed += [
+        {
+            "name": f"已下课{i}",
+            "type": 4,
+            "label": "已结束",
+            "main": "今日课程已上完",
+            "sub": "共 3.2 小时",
+            "hours": 3.2,
+        }
+        for i in range(6)
+    ]
+    mixed += [
+        {"name": f"无课{i}", "type": 5, "label": "无课程", "main": "今天没有课", "sub": ""}
+        for i in range(12)
+    ]
+    paths = render.render_everyone(
+        mixed, tmp_path / "out-mixed", page_size=8, width=900, font_path=""
+    )
+    assert len(paths) == 1, "12 重点 + 6 已下课 + 12 无课 应合并成一张图"
 
 
 def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
