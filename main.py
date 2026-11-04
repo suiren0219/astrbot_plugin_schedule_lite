@@ -242,7 +242,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.10.4",
+    "v1.10.5",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -2623,6 +2623,8 @@ class ScheduleLitePlugin(Star):
         for row in rows:
             main = str(row.get("main") or "")
             sub = str(row.get("sub") or "")
+            if main == str(row.get("name") or ""):
+                main = ""  # 节假日卡 name/main 同源，格子副行别重复一遍
             if sub:
                 main = f"{main} · {sub}" if main else sub
             mine = bool(row.get("mine"))

@@ -63,6 +63,7 @@ STATUS_STYLE = {
     3: ("#1D4ED8", "#DBEAFE"),  # 下一节
     4: ("#64748B", "#F1F5F9"),  # 已结束
     5: ("#94A3B8", "#F8FAFC"),  # 无课程
+    6: ("#0369A1", "#E0F2FE"),  # 请假中
 }
 
 AVATAR_COLORS = (
@@ -820,15 +821,15 @@ def _draw_avatar(
 
 
 def _everyone_blocks(entries: Sequence[dict]) -> list[tuple[str, Any, float]]:
-    """把状态列表拆成排版块：重点状态整行，已下课/无课压成紧凑网格。
+    """把状态列表拆成排版块：重点状态双列格子，已下课/无课压成紧凑网格。
 
-    返回 (kind, payload, 高度权重)：row=1.0、chips=0.6、divider=0.4。
+    返回 (kind, payload, 高度权重)：row=0.5（两格并排一行）、chips=0.6、divider=0.4。
     """
     key_rows = [e for e in entries if int(e.get("type", 5)) in (0, 1, 2, 3, 6)]
     ended_rows = [e for e in entries if int(e.get("type", 5)) == 4]
     idle_rows = [e for e in entries if int(e.get("type", 5)) == 5]
 
-    blocks: list[tuple[str, Any, float]] = [("row", e, 1.0) for e in key_rows]
+    blocks: list[tuple[str, Any, float]] = [("row", e, 0.5) for e in key_rows]
     if ended_rows:
         blocks.append(("divider", f"已下课 · {len(ended_rows)} 人", 0.4))
         for start in range(0, len(ended_rows), 3):
@@ -875,9 +876,9 @@ def render_everyone(
     day_dir.mkdir(parents=True, exist_ok=True)
     _prune_day_dirs(out, day_dir.name, keep=3)
 
-    # 已下课/无课压成 3 列小卡，一张图能放下更多人；重点状态仍是整行
+    # 已下课/无课压成 3 列小卡，一张图能放下更多人；重点状态也是双列格子
     blocks = _everyone_blocks(entries)
-    capacity = max(int(page_size or 8), 12)
+    capacity = max(int(page_size or 8), 15)
     pages: list[list[tuple[str, Any, float]]] = []
     current: list[tuple[str, Any, float]] = []
     used = 0.0
@@ -895,19 +896,29 @@ def render_everyone(
     status_style = STATUS_STYLE_DARK if dark else STATUS_STYLE
     stamp = time.strftime("%Y%m%d%H%M%S") + f"{int(time.time() * 1000) % 1000:03d}"
     paths: list[Path] = []
-    row_h, row_gap = 96, 10
+    cell_h, cell_gap = 64, 8
+    cell_w = (width - 56 - 10) / 2
     divider_h = 40
     chip_h, chip_gap = 56, 8
 
     for page_no, chunk in enumerate(pages, start=1):
+        # 高度按“两格一行”预估：row 两两配对，落单的格子也占一行
         height = 150 + 64
+        pending_rows = 0
         for kind, _payload, _cost in chunk:
             if kind == "row":
-                height += row_h + row_gap
-            elif kind == "divider":
-                height += divider_h
+                if pending_rows:
+                    height += cell_h + cell_gap
+                    pending_rows = 0
+                else:
+                    pending_rows = 1
             else:
-                height += chip_h + chip_gap
+                if pending_rows:
+                    height += cell_h + cell_gap
+                    pending_rows = 0
+                height += divider_h if kind == "divider" else chip_h + chip_gap
+        if pending_rows:
+            height += cell_h + cell_gap
         image, overlay, draw = _new_page(
             width, height, background, background_dim, dark, scrim
         )
@@ -932,55 +943,50 @@ def render_everyone(
             )
 
         y = _s(150)
+        pending: list = []
+
+        def flush_rows() -> None:
+            """把攒下的重点状态画成一行双列格子（1 或 2 格）。"""
+            nonlocal y
+            if not pending:
+                return
+            for index, entry in enumerate(pending):
+                sub = str(entry.get("main") or "")
+                extra = str(entry.get("sub") or "")
+                if extra:
+                    sub = f"{sub} · {extra}" if sub else extra
+                raw_type = entry.get("type", 5)
+                _draw_grid_cell(
+                    overlay,
+                    draw,
+                    28 + index * (cell_w + 10),
+                    y,
+                    cell_w,
+                    cell_h,
+                    name=str(entry.get("name") or ""),
+                    sub=sub,
+                    badge=str(entry.get("label") or ""),
+                    # type=0（分身中）是合法值，不能用 or 兜底，否则掉进无课灰色
+                    badge_kind=str(int(raw_type if raw_type is not None else 5)),
+                    avatar=str(entry.get("avatar") or ""),
+                    style=style,
+                    status_style=status_style,
+                    regular=regular,
+                    bold=bold,
+                    name_size=17,
+                    sub_size=13,
+                )
+            pending.clear()
+            y += _s(cell_h + cell_gap)
+
         for kind, payload, _cost in chunk:
             if kind == "row":
-                entry = payload
-                status_type = int(entry.get("type", 5))
-                fg, bg = status_style.get(status_type, status_style[5])
-                draw.rounded_rectangle(
-                    (_s(28), y, _s(width - 28), y + _s(row_h)),
-                    radius=_s(16),
-                    fill=style["surface"],
-                    outline=style["outline"],
-                    width=_s(1),
-                )
-                row_center = y + _s(row_h) / 2
-                cx, cy = _s(76), row_center
-                _draw_avatar(overlay, draw, cx, cy, _s(28), str(entry.get("avatar") or ""), entry.get("name", ""))
-
-                # 三行文字按整块垂直居中，换字体也不会压到卡片边框
-                _draw_text_block(
-                    draw,
-                    _s(122),
-                    row_center,
-                    [
-                        (str(entry.get("name", "")), _font(bold, _s(23)), style["name"], _s(430)),
-                        (str(entry.get("main", "")), _font(regular, _s(21)), style["main"], _s(width - 122 - 44)),
-                        (str(entry.get("sub", "")), _font(regular, _s(17)), style["sub"], _s(width - 122 - 44)),
-                    ],
-                    gap=_s(4),
-                )
-
-                label = entry.get("label", "")
-                chip_font = _font(bold, _s(17))
-                chip_w = chip_font.getlength(label) + _s(28)
-                chip_h_label = _s(32)
-                chip_x = _s(width - 44) - chip_w
-                chip_y = row_center - chip_h_label / 2
-                draw.rounded_rectangle(
-                    (chip_x, chip_y, chip_x + chip_w, chip_y + chip_h_label),
-                    radius=_s(16),
-                    fill=bg,
-                )
-                draw.text(
-                    (chip_x + _s(14), chip_y + chip_h_label / 2),
-                    label,
-                    font=chip_font,
-                    fill=fg,
-                    anchor="lm",
-                )
-                y += _s(row_h + row_gap)
-            elif kind == "divider":
+                pending.append(payload)
+                if len(pending) == 2:
+                    flush_rows()
+                continue
+            flush_rows()
+            if kind == "divider":
                 draw.text((_s(48), y + _s(4)), str(payload), font=_font(bold, _s(18)), fill=style["muted"])
                 y += _s(divider_h)
             else:
@@ -1008,6 +1014,7 @@ def render_everyone(
                     note = _ellipsize(draw, note, _font(regular, _s(12)), _s(name_w))
                     draw.text((_s(name_x), y + _s(31)), note, font=_font(regular, _s(12)), fill="#94A3B8")
                 y += _s(chip_h + chip_gap)
+        flush_rows()
 
         draw.line(
             (_s(48), _s(height - 52), _s(width - 48), _s(height - 52)),
@@ -1172,6 +1179,95 @@ def render_day_card(
 # ---------------------------------------------------------------- 双列网格卡片
 
 
+def _draw_grid_cell(
+    overlay: Any,
+    draw: Any,
+    x: float,
+    yy: float,
+    cell_w: float,
+    cell_h: float,
+    *,
+    name: str,
+    sub: str,
+    badge: str = "",
+    badge_kind: str = "",
+    avatar: str = "",
+    highlight: str = "",
+    style: dict,
+    status_style: dict,
+    regular: str,
+    bold: str,
+    name_size: int = 19,
+    sub_size: int = 14,
+) -> None:
+    """双列网格里的一个人物格子：可选头像 + 两行字 + 右上角状态徽章。
+
+    highlight: "now" 蓝框 / "next" 黄框 / "mine" 紫框；
+    badge_kind 支持 "now"/"next"/"mine"/"rank" 或直接给状态色号 "0"-"6"。
+    """
+    outline_color = style["outline"]
+    outline_w = 1
+    if highlight == "now":
+        outline_color, outline_w = "#3B82F6", 2
+    elif highlight == "next":
+        outline_color, outline_w = "#F59E0B", 2
+    elif highlight == "mine":
+        outline_color, outline_w = "#7C3AED", 2
+    draw.rounded_rectangle(
+        (_s(x), yy, _s(x + cell_w), yy + _s(cell_h)),
+        radius=_s(14),
+        fill=style["surface"],
+        outline=outline_color,
+        width=_s(outline_w),
+    )
+    center_y = yy + _s(cell_h) / 2
+    text_x = x + 16
+    name_w = cell_w - 110
+    if avatar:
+        _draw_avatar(overlay, draw, _s(x + 32), center_y, _s(18), avatar, name)
+        text_x = x + 60
+        name_w = cell_w - 60 - 96
+    _draw_text_block(
+        draw,
+        _s(text_x),
+        center_y,
+        [
+            (name, _font(bold, _s(name_size)), style["name"], _s(name_w)),
+            (
+                sub,
+                _font(regular, _s(sub_size)),
+                style["sub"],
+                _s(cell_w - (text_x - x) - 12),
+            ),
+        ],
+        gap=_s(2),
+    )
+    if badge:
+        kind = str(badge_kind or "")
+        index = (
+            int(kind)
+            if kind.isdigit()
+            else {"now": 1, "next": 3, "mine": 0, "rank": 3}.get(kind, 5)
+        )
+        fg, bg_color = status_style.get(index, status_style[5])
+        badge_font = _font(bold, _s(15))
+        badge_w = badge_font.getlength(badge) / SCALE + 24
+        badge_x = x + cell_w - 12 - badge_w
+        badge_y = yy + _s(10)
+        draw.rounded_rectangle(
+            (_s(badge_x), badge_y, _s(badge_x + badge_w), badge_y + _s(28)),
+            radius=_s(14),
+            fill=bg_color,
+        )
+        draw.text(
+            (_s(badge_x + 12), badge_y + _s(14)),
+            badge,
+            font=badge_font,
+            fill=fg,
+            anchor="lm",
+        )
+
+
 def render_grid_card(
     rows: Sequence[dict],
     out_dir: str | Path,
@@ -1266,77 +1362,26 @@ def render_grid_card(
             grid_row = index // columns
             x = 28 + col * (cell_w + col_gap)
             yy = y + _s(grid_row * (cell_h + cell_gap))
-            highlight = str(row.get("highlight") or "")
-            outline_color = style["outline"]
-            outline_w = 1
-            if highlight == "now":
-                outline_color, outline_w = "#3B82F6", 2
-            elif highlight == "next":
-                outline_color, outline_w = "#F59E0B", 2
-            elif highlight == "mine":
-                outline_color, outline_w = "#7C3AED", 2
-            draw.rounded_rectangle(
-                (_s(x), yy, _s(x + cell_w), yy + _s(cell_h)),
-                radius=_s(14),
-                fill=style["surface"],
-                outline=outline_color,
-                width=_s(outline_w),
-            )
-            center_y = yy + _s(cell_h) / 2
-            avatar = str(row.get("avatar") or "")
-            text_x = x + 16
-            name_w = cell_w - 110
-            if avatar:
-                _draw_avatar(
-                    overlay, draw, _s(x + 32), center_y, _s(18), avatar,
-                    str(row.get("name") or ""),
-                )
-                text_x = x + 60
-                name_w = cell_w - 60 - 96
-            text_w = cell_w - (text_x - x) - 12
-            _draw_text_block(
+            _draw_grid_cell(
+                overlay,
                 draw,
-                _s(text_x),
-                center_y,
-                [
-                    (
-                        str(row.get("name") or ""),
-                        _font(bold, _s(name_size)),
-                        style["name"],
-                        _s(name_w),
-                    ),
-                    (
-                        str(row.get("sub") or ""),
-                        _font(regular, _s(sub_size)),
-                        style["sub"],
-                        _s(text_w),
-                    ),
-                ],
-                gap=_s(2),
+                x,
+                yy,
+                cell_w,
+                cell_h,
+                name=str(row.get("name") or ""),
+                sub=str(row.get("sub") or ""),
+                badge=str(row.get("badge") or ""),
+                badge_kind=str(row.get("badge_kind") or ""),
+                avatar=str(row.get("avatar") or ""),
+                highlight=str(row.get("highlight") or ""),
+                style=style,
+                status_style=status_style,
+                regular=regular,
+                bold=bold,
+                name_size=name_size,
+                sub_size=sub_size,
             )
-            badge = str(row.get("badge") or "")
-            if badge:
-                kind = str(row.get("badge_kind") or "")
-                fg, bg_color = status_style.get(
-                    {"now": 1, "next": 3, "mine": 0, "rank": 3}.get(kind, 5),
-                    status_style[5],
-                )
-                badge_font = _font(bold, _s(15))
-                badge_w = badge_font.getlength(badge) / SCALE + 24
-                badge_x = x + cell_w - 12 - badge_w
-                badge_y = yy + _s(10)
-                draw.rounded_rectangle(
-                    (_s(badge_x), badge_y, _s(badge_x + badge_w), badge_y + _s(28)),
-                    radius=_s(14),
-                    fill=bg_color,
-                )
-                draw.text(
-                    (_s(badge_x + 12), badge_y + _s(14)),
-                    badge,
-                    font=badge_font,
-                    fill=fg,
-                    anchor="lm",
-                )
 
         y = y + grid_rows * _s(cell_h + cell_gap)
         if notes:
