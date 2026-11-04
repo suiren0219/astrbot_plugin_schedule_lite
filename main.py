@@ -242,7 +242,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.10.3",
+    "v1.10.4",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1534,6 +1534,8 @@ class ScheduleLitePlugin(Star):
             holiday=self._calendar_for(now.date()),
             highlight_owner=highlight,
             reverse=reverse,
+            # 图片用双列网格，一页 28 人；显式要“全部”时不动上限
+            limit=None if full else 28,
         )
         if not data["rows"]:
             yield event.plain_result(f"{mode_label}大家都没有课哦…")
@@ -1542,17 +1544,21 @@ class ScheduleLitePlugin(Star):
         subtitle_parts = [f"{now:%m/%d}", f"共 {data['total']} 人"]
         if data["hidden"]:
             subtitle_parts.append(f"显示前 {len(data['rows'])} 名")
-        if data["mine"]:
-            mine = data["mine"]
-            label = f"倒数第 {mine['rank']} 名" if reverse else f"第 {mine['rank']} 名"
-            subtitle_parts.append(f"你{label} · {mine['shown']} 小时")
-        avatars = await self._avatar_paths(
-            [row["timetable"] for row in data["rows"]]
-        )
+        mine = data["mine"]
+        shown_ids = {row["timetable"].owner_id for row in data["rows"]}
+        mine_in_rows = bool(mine and mine["timetable"].owner_id in shown_ids)
+        if mine and not mine_in_rows and len(data["rows"]) >= 28:
+            # 给「你」行腾一个位置，保证不论名次在哪都还是单张图
+            data = {**data, "rows": data["rows"][:27], "hidden": data["hidden"] + 1}
+        targets = [row["timetable"] for row in data["rows"]]
+        if mine and not mine_in_rows:
+            targets.append(mine["timetable"])
+        avatars = await self._avatar_paths(targets)
         card_rows = []
         for row in data["rows"]:
             owner = row["timetable"].owner_name or row["timetable"].owner_id
-            if highlight and row["timetable"].owner_id == highlight:
+            is_mine = bool(mine and row["timetable"].owner_id == mine["timetable"].owner_id)
+            if is_mine:
                 owner += "（你）"
             card_rows.append(
                 {
@@ -1561,6 +1567,21 @@ class ScheduleLitePlugin(Star):
                     "main": f"{row['shown']} 小时",
                     "sub": "",
                     "avatar": avatars.get(row["timetable"].owner_id, ""),
+                    "mine": is_mine,
+                }
+            )
+        # 自己的名次单独成行：不在展示页里也要追加一行，别让人翻不到
+        if mine and not mine_in_rows:
+            mine_tt = mine["timetable"]
+            rank_label = f"倒数第 {mine['rank']} 名" if reverse else f"第 {mine['rank']} 名"
+            card_rows.append(
+                {
+                    "name": f"你 · {mine_tt.owner_name or mine_tt.owner_id}",
+                    "label": f"#{mine['rank']}",
+                    "main": f"{mine['shown']} 小时",
+                    "sub": rank_label,
+                    "avatar": avatars.get(mine_tt.owner_id, ""),
+                    "mine": True,
                 }
             )
         paths = self._render_rank_card(title, " · ".join(subtitle_parts), card_rows)
@@ -2592,29 +2613,44 @@ class ScheduleLitePlugin(Star):
         return total / 60.0
 
     def _render_rank_card(self, title: str, subtitle: str, rows: list[dict]) -> list:
-        """排行榜 / 节假日卡片：复用状态卡渲染，失败返回空列表退回文本。"""
+        """排行榜卡片：双列高密度头像网格，一页最多 28 人，失败退回文本。
+
+        rows: [{"name", "label", "main", "sub", "avatar", "mine"}]
+        """
         if not self._image_enabled("everyone_image"):
             return []
-        entries = [
-            {
-                "name": row.get("name", ""),
-                "type": int(row.get("type", 1) or 1),
-                "label": row.get("label", ""),
-                "main": row.get("main", ""),
-                "sub": row.get("sub", ""),
-                "avatar": row.get("avatar", ""),
-            }
-            for row in rows
-        ]
+        cells = []
+        for row in rows:
+            main = str(row.get("main") or "")
+            sub = str(row.get("sub") or "")
+            if sub:
+                main = f"{main} · {sub}" if main else sub
+            mine = bool(row.get("mine"))
+            badge_kind = "rank"
+            if mine:
+                badge_kind = "mine"
+            elif row.get("type") == 2:
+                badge_kind = "next"
+            elif row.get("type") == 1:
+                badge_kind = "now"
+            cells.append(
+                {
+                    "name": row.get("name", ""),
+                    "sub": main,
+                    "badge": row.get("label", ""),
+                    "badge_kind": badge_kind,
+                    "highlight": "mine" if mine else "",
+                    "avatar": row.get("avatar", ""),
+                }
+            )
         try:
             cache_dir = self._plugin_data_dir() / "cache" / "rank"
-            return render_mod.render_everyone(
-                entries,
+            return render_mod.render_grid_card(
+                cells,
                 cache_dir,
                 title=title,
                 subtitle=subtitle,
                 footer_note="",
-                page_size=20,
                 width=self._image_width(),
                 font_path=self._font_path(),
                 background=self._image_background(),
@@ -2622,6 +2658,12 @@ class ScheduleLitePlugin(Star):
                 dark=self._image_dark(),
                 scrim=self._image_scrim(),
                 image_quality=self._image_quality(),
+                columns=2,
+                cell_h=60,
+                rows_per_col=14,
+                name_size=17,
+                sub_size=13,
+                file_prefix="rank",
             )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] 排行卡片生成失败: {e}")

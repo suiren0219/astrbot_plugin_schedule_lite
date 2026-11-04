@@ -1192,6 +1192,8 @@ def render_grid_card(
     empty_text: str = "没有数据",
     note_lines: Sequence[str] = (),
     file_prefix: str = "grid",
+    name_size: int = 19,
+    sub_size: int = 14,
 ) -> list[Path]:
     """通用双列（或多列）网格卡片。
 
@@ -1271,6 +1273,8 @@ def render_grid_card(
                 outline_color, outline_w = "#3B82F6", 2
             elif highlight == "next":
                 outline_color, outline_w = "#F59E0B", 2
+            elif highlight == "mine":
+                outline_color, outline_w = "#7C3AED", 2
             draw.rounded_rectangle(
                 (_s(x), yy, _s(x + cell_w), yy + _s(cell_h)),
                 radius=_s(14),
@@ -1279,22 +1283,33 @@ def render_grid_card(
                 width=_s(outline_w),
             )
             center_y = yy + _s(cell_h) / 2
+            avatar = str(row.get("avatar") or "")
+            text_x = x + 16
+            name_w = cell_w - 110
+            if avatar:
+                _draw_avatar(
+                    overlay, draw, _s(x + 32), center_y, _s(18), avatar,
+                    str(row.get("name") or ""),
+                )
+                text_x = x + 60
+                name_w = cell_w - 60 - 96
+            text_w = cell_w - (text_x - x) - 12
             _draw_text_block(
                 draw,
-                _s(x + 16),
+                _s(text_x),
                 center_y,
                 [
                     (
                         str(row.get("name") or ""),
-                        _font(bold, _s(19)),
+                        _font(bold, _s(name_size)),
                         style["name"],
-                        _s(cell_w - 110),
+                        _s(name_w),
                     ),
                     (
                         str(row.get("sub") or ""),
-                        _font(regular, _s(14)),
+                        _font(regular, _s(sub_size)),
                         style["sub"],
-                        _s(cell_w - 24),
+                        _s(text_w),
                     ),
                 ],
                 gap=_s(2),
@@ -1303,7 +1318,8 @@ def render_grid_card(
             if badge:
                 kind = str(row.get("badge_kind") or "")
                 fg, bg_color = status_style.get(
-                    {"now": 1, "next": 3}.get(kind, 5), status_style[5]
+                    {"now": 1, "next": 3, "mine": 0, "rank": 3}.get(kind, 5),
+                    status_style[5],
                 )
                 badge_font = _font(bold, _s(15))
                 badge_w = badge_font.getlength(badge) / SCALE + 24
