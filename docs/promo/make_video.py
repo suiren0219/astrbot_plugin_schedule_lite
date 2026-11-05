@@ -411,48 +411,62 @@ def build_clips(assets: dict[str, Image.Image]) -> list:
     d.text((icon_cx, 62), "!", font=font(True, 30), fill="#0B1220", anchor="mm")
     d.text((600 + 40, 54), "部署前，花一分钟看这里", font=tf, fill=TEXT, anchor="mm")
     clips.append(slide(title_img, (W // 2 - 600, 120), scene=s, delay=0.15, dy=30))
-    tips = [
-        ("放行端口", "云服务器安全组 / 防火墙放行网页端口（默认 8766 TCP）"),
-        ("警惕裸 IP", "裸 IP 链接发到群里 = 公开服务器 IP，可能被扫描攻击"),
-        ("域名反代", "web_host=127.0.0.1 + Nginx/Caddy 反代，安全组只放行 443"),
-    ]
-    for i, (tag, desc) in enumerate(tips):
-        card = Image.new("RGBA", (W - 480, 130), (0, 0, 0, 0))
-        d = ImageDraw.Draw(card)
-        d.rounded_rectangle((0, 0, W - 481, 129), radius=24, fill=CARD, outline=LINE, width=2)
-        d.text((50, 40), tag, font=font(True, 38), fill="#FCD34D")
-        d.text((280, 46), desc, font=font(False, 30), fill=TEXT)
-        clips.append(slide(card, (240, 330 + i * 160), scene=s, delay=0.5 + i * 0.15, dy=44))
-    note = Image.new("RGBA", (1400, 50), (0, 0, 0, 0))
-    ImageDraw.Draw(note).text((700, 25), "完整指南：主插件仓库 docs/deploy-security.md",
+    tags = ["放行端口", "警惕裸 IP", "域名反代"]
+    widths = [badge_layer(t, size=34, fg="#FCD34D", bg=(30, 41, 66)).width for t in tags]
+    x = W // 2 - (sum(widths) + 2 * 40) // 2
+    for i, (t, w) in enumerate(zip(tags, widths)):
+        clips.append(pop(badge_layer(t, size=34, fg="#FCD34D", bg=(30, 41, 66)),
+                         (x + w / 2, 520), scene=s, delay=0.6 + i * 0.18))
+        x += w + 40
+    note = Image.new("RGBA", (1500, 50), (0, 0, 0, 0))
+    ImageDraw.Draw(note).text((750, 25), "详细步骤：主插件仓库 docs/deploy-security.md",
                               font=font(False, 26), fill=MUTED, anchor="mm")
-    clips.append(slide(note, (W // 2 - 700, 866), scene=s, delay=1.4, dy=20))
+    clips.append(slide(note, (W // 2 - 750, 700), scene=s, delay=1.3, dy=20))
 
     # ---- S10 结尾
     s = 9 * SCENE
     title = Image.new("RGBA", (1200, 160), (0, 0, 0, 0))
     ImageDraw.Draw(title).text((600, 80), "课表 Lite", font=font(True, 96), fill=TEXT, anchor="mm")
-    clips.append(pop(title, (W // 2, 330), scene=s, delay=0.2, dur=SCENE - 0.4))
+    clips.append(pop(title, (W // 2, 300), scene=s, delay=0.2, dur=SCENE - 0.4))
     sub = Image.new("RGBA", (1700, 60), (0, 0, 0, 0))
     ImageDraw.Draw(sub).text((850, 30), "课表数据只保存在你自己的服务器，不连校园网，不抓教务系统",
                              font=font(False, 32), fill=MUTED, anchor="mm")
-    clips.append(slide(sub, (W // 2 - 850, 470), scene=s, delay=0.5, dy=24))
+    clips.append(slide(sub, (W // 2 - 850, 430), scene=s, delay=0.5, dy=24))
     repo_card = Image.new("RGBA", (1440, 140), (0, 0, 0, 0))
     d = ImageDraw.Draw(repo_card)
     d.rounded_rectangle((0, 0, 1439, 139), radius=26, fill=CARD, outline=ACCENT, width=2)
     d.text((720, 70), "github.com/suiren0219/astrbot_plugin_schedule_lite",
            font=font(True, 44), fill="#93C5FD", anchor="mm")
-    clips.append(slide(repo_card, (W // 2 - 720, 570), scene=s, delay=0.8, dy=44))
+    clips.append(slide(repo_card, (W // 2 - 720, 520), scene=s, delay=0.8, dy=44))
+    import math
+
+    def star_layer(size: int, fill: str = "#FBBF24") -> Image.Image:
+        img = Image.new("RGBA", (size + 8, size + 8), (0, 0, 0, 0))
+        d = ImageDraw.Draw(img)
+        cx = cy = (size + 8) / 2
+        r_out, r_in = size / 2, size / 4.6
+        pts = []
+        for k in range(10):
+            r = r_out if k % 2 == 0 else r_in
+            ang = -math.pi / 2 + k * math.pi / 5
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+        d.polygon(pts, fill=fill)
+        return img
+
+    star_row = Image.new("RGBA", (900, 150), (0, 0, 0, 0))
+    sd = ImageDraw.Draw(star_row)
+    sd.text((450, 44), "欢迎 Star", font=font(True, 62), fill=TEXT, anchor="mm")
+    sd.text((450, 112), "觉得有用的话，去 GitHub 点一颗星吧", font=font(False, 27),
+            fill=MUTED, anchor="mm")
+    clips.append(slide(star_row, (W // 2 - 450, 700), scene=s, delay=1.5, dy=30))
+    for i, sx in enumerate((W // 2 - 380, W // 2 + 380)):
+        clips.append(pop(star_layer(58), (sx, 748), scene=s, delay=1.7 + i * 0.14))
     tags = ["AstrBot 插件", "MIT 开源", "QQ 群友好"]
     widths = [badge_layer(t, size=28).width for t in tags]
     x = W // 2 - (sum(widths) + 2 * 24) // 2
     for i, (t, w) in enumerate(zip(tags, widths)):
-        clips.append(pop(badge_layer(t, size=28), (x + w / 2, 800), scene=s, delay=1.3 + i * 0.12))
+        clips.append(pop(badge_layer(t, size=28), (x + w / 2, 930), scene=s, delay=2.0 + i * 0.12))
         x += w + 24
-    note = Image.new("RGBA", (1500, 50), (0, 0, 0, 0))
-    ImageDraw.Draw(note).text((750, 25), "装上网页伴侣，帮助手册自动上线为网页",
-                              font=font(False, 28), fill=MUTED, anchor="mm")
-    clips.append(slide(note, (W // 2 - 750, 900), scene=s, delay=1.7, dy=20))
 
     # ---- 各幕进度点
     for i in range(SCENES):
@@ -471,7 +485,9 @@ def build_audio() -> list:
     for scene in range(1, SCENES + 1):
         wav = narration_dir / f"scene{scene:02d}.wav"
         if wav.exists() and not args.no_narration:
-            tracks.append(AudioFileClip(str(wav)).with_start((scene - 1) * SCENE + 0.35))
+            tracks.append(AudioFileClip(str(wav))
+                          .with_start((scene - 1) * SCENE + 0.35)
+                          .with_effects([afx.MultiplyVolume(args.voice_volume)]))
     bgm_path = args.bgm
     if bgm_path:
         bgm = (AudioFileClip(str(bgm_path))
@@ -498,7 +514,9 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--bgm", default="", help="BGM 音频路径（如星茶会）；留空则无 BGM")
     parser.add_argument("--bgm-volume", type=float, default=0.3,
-                        help="BGM 音量，相对配音的倍数（默认 0.3）")
+                        help="BGM 音量倍数（默认 0.3）")
+    parser.add_argument("--voice-volume", type=float, default=2.0,
+                        help="配音音量倍数（默认 2.0，补偿 TTS 输出偏轻）")
     parser.add_argument("--no-narration", action="store_true", help="不合成配音轨")
     args = parser.parse_args()
     assets = build_assets()
