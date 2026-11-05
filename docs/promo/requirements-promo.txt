@@ -1,0 +1,3 @@
+moviepy>=2.0
+imageio-ffmpeg
+Pillow
