@@ -66,7 +66,11 @@
         <div class="card">
           <div class="section-head">
             <div><h2>现在的状态</h2><p>本地计算，不请求外部接口</p></div>
-            <button class="btn ghost" id="refresh-live">刷新</button>
+            <div class="row-actions">
+              <select class="input short" id="live-group-filter" aria-label="群聊筛选"><option value="">全部群</option></select>
+              <button class="btn ghost" id="live-expand-all" type="button">展开全部</button>
+              <button class="btn ghost" id="refresh-live">刷新</button>
+            </div>
           </div>
           <div id="live-list" class="live-list"><div class="empty">加载中…</div></div>
         </div>
@@ -98,6 +102,7 @@
           <div class="section-head">
             <div><h2>课表数据</h2><p>可以直接新增、编辑或删除绑定记录</p></div>
             <div class="row-actions">
+              <select class="input short" id="record-group-filter" aria-label="群聊筛选"><option value="">全部群</option></select>
               <input id="search" class="input" placeholder="搜索昵称 / QQ / 课表名">
               <button class="btn ghost" id="refresh-records" type="button">刷新</button>
               <button class="btn primary" id="add-record">新增课表</button>

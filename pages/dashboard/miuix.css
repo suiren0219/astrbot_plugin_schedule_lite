@@ -168,6 +168,14 @@ select.input { min-width: 110px; }
 .live-group-head b { font-size: 15px; }
 .live-group-head span { padding: 4px 10px; border-radius: 999px; background: var(--miuix-soft-2); color: var(--miuix-text-2); font-size: 12px; font-weight: 650; }
 .live-group-body { display: grid; gap: 8px; }
+/* 群聊收纳：点群标题折叠/展开该群成员 */
+.live-group-head { cursor: pointer; user-select: none; border-radius: 12px; transition: background .15s; }
+.live-group-head:hover { background: var(--miuix-soft-2); }
+.live-group-toggle { display: inline-block; width: 14px; color: var(--miuix-text-2); font-size: 12px; transition: transform .18s; }
+.live-group.collapsed .live-group-toggle { transform: rotate(-90deg); }
+.live-group.collapsed .live-group-body { display: none; }
+.live-group.collapsed + .live-group { margin-top: 0; padding-top: 8px; }
+
 .live-row { display: flex; align-items: center; gap: 12px; padding: 12px 14px; border-radius: 18px; background: var(--miuix-soft); }
 .avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; background: var(--miuix-accent-soft); color: var(--miuix-accent); font-weight: 750; flex: none; position: relative; overflow: hidden; }
 .avatar b { font-weight: 750; }

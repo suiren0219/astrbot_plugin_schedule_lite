@@ -1108,6 +1108,28 @@ def test_web_api_live_groups_by_group(plugin):
     assert filtered["data"]["total"] == 1
     assert filtered["data"]["items"][0]["name"] == "张三"
     assert filtered["data"]["groups"] == []
+    # 群聊筛选下拉的数据源：群号 + 未绑定群 + 每群人数
+    options = {opt["id"]: opt["count"] for opt in live["data"]["group_options"]}
+    assert options == {"1001": 1, "1002": 2, "__none__": 1}
+
+    web.request.args = {"group": "__none__"}
+    unbound = asyncio.run(plugin._api_live())
+    assert unbound["data"]["total"] == 1
+    assert unbound["data"]["items"][0]["name"] == "王五"
+
+    # 课表数据列表同样支持群筛选
+    web.request.args = {"group": "1002"}
+    listing = asyncio.run(plugin._api_timetables())
+    assert listing["data"]["total"] == 2
+
+    web.request.args = {"group": "__none__"}
+    listing = asyncio.run(plugin._api_timetables())
+    assert listing["data"]["total"] == 1
+    assert listing["data"]["items"][0]["owner_name"] == "王五"
+
+    web.request.args = {}
+    listing = asyncio.run(plugin._api_timetables())
+    assert listing["data"]["total"] == 3
 
 
 def _scheduled_plugin(tmp_path, config):
@@ -1358,6 +1380,50 @@ def test_query_hint_includes_countdown_events(image_plugin):
     assert "还有" in captured.get("note", "")
     # 文字版也要带上
     assert any("大学英语等级考试4" in line for line in out)
+
+
+def test_day_card_title_matches_query_date(image_plugin):
+    """查明天时卡片标题必须是「明日课表」，不能写死今日。"""
+    import main as plugin_main
+
+    captured = {}
+
+    def fake_render(rows, out_dir, **kwargs):
+        captured["title"] = kwargs.get("title")
+        return []
+
+    from datetime import timedelta
+
+    from schedule_lite_core.model import Course, Timetable
+
+    # 固定日期课表：今天和明天都有课，避免样例只排周二/周四导致空日提前返回
+    today = image_plugin._now().date()
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    weeks = list(range(1, 21))
+    tt = Timetable(
+        owner_id="10001",
+        owner_name="张三",
+        term_start=monday.isoformat(),
+        total_weeks=20,
+        courses=[
+            Course(name="今天的课", day=today.isoweekday(), weeks=weeks, start="08:00", end="09:40"),
+            Course(name="明天的课", day=(today + timedelta(days=1)).isoweekday(), weeks=weeks, start="08:00", end="09:40"),
+        ],
+    )
+    event = _Event("/课表 导入")
+    image_plugin.store.put(image_plugin._user_key(event), tt)
+    assert image_plugin._render_day_card(tt, today + timedelta(days=1)) is not None
+
+    real = plugin_main.render_mod.render_day_card
+    plugin_main.render_mod.render_day_card = fake_render
+    try:
+        asyncio.run(_collect(image_plugin._h_query(event, "明天")))
+        assert "明日" in captured.get("title", "")
+        assert "今日" not in captured.get("title", "")
+        asyncio.run(_collect(image_plugin._h_query(event, "")))
+        assert "今日" in captured.get("title", "")
+    finally:
+        plugin_main.render_mod.render_day_card = real
 
 
 def test_query_image_gets_tomorrow_hint(image_plugin):

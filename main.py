@@ -242,7 +242,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.10.5",
+    "v1.10.6",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -2420,16 +2420,28 @@ class ScheduleLitePlugin(Star):
         footer = "发送 /课表 查看自己的课表"
         if tt.term_guessed:
             footer = "开学日期按导入当天推算，发 /课表 学期 2026-09-07 可修正"
+        # 标题跟着查询日期走：/课表 明天 不能再写「今日课表」
+        day_delta = (d - self._now().date()).days
+        if day_delta == 0:
+            day_word = "今日"
+        elif day_delta == 1:
+            day_word = "明日"
+        elif day_delta == -1:
+            day_word = "昨日"
+        else:
+            day_word = f"{d:%m/%d}"
+        card_title = f"{label} · {day_word}课表" if label else f"{day_word}课表"
+        card_empty = "今天没有课～" if day_delta == 0 else f"{day_word}没有课～"
         try:
             cache_dir = self._plugin_data_dir() / "cache" / "day"
             return render_mod.render_day_card(
                 rows,
                 cache_dir,
-                title=f"{label or '今日'}课表" if label else "今日课表",
+                title=card_title,
                 subtitle=subtitle,
                 footer_note=footer,
                 next_note=next_note,
-                empty_text=empty_text or "今天没有课～",
+                empty_text=empty_text or card_empty,
                 width=self._image_width(),
                 font_path=self._font_path(),
                 background=self._image_background(),
@@ -3442,11 +3454,25 @@ class ScheduleLitePlugin(Star):
             counts = {label: 0 for label in STATUS_LABEL.values()}
             for entry in statuses:
                 counts[entry["label"]] = counts.get(entry["label"], 0) + 1
+            # 群下拉用的选项：群号 + 每群人数（含未绑定群）
+            group_counts: dict[str, int] = {}
+            for tt in timetables:
+                gids = [str(g) for g in tt.groups if g] or [""]
+                for gid in dict.fromkeys(gids):
+                    group_counts[gid] = group_counts.get(gid, 0) + 1
+            group_options = [
+                {"id": gid or "__none__", "name": f"群 {gid}" if gid else "未绑定群", "count": n}
+                for gid, n in sorted(
+                    group_counts.items(),
+                    key=lambda item: (item[0] == "", int(item[0]) if item[0].isdigit() else 10**18, item[0]),
+                )
+            ]
             return self._ok(
                 {
                     "users": len(records),
                     "courses": sum(len(tt.courses) for tt in records.values()),
                     "groups": len(self._group_origins()),
+                    "group_options": group_options,
                     "today": today.isoformat(),
                     "weekday": weekday_cn(today),
                     "status_counts": counts,
@@ -3472,11 +3498,18 @@ class ScheduleLitePlugin(Star):
     async def _api_timetables(self):
         try:
             query = self._query("q").strip().lower()
+            group_id = self._query("group").strip()
             rows = []
             for key, tt in self.store.all().items():
                 if query and query not in " ".join(
                     (key, tt.owner_id, tt.owner_name, tt.name)
                 ).lower():
+                    continue
+                # 群聊筛选：空串表示全部；未绑定群用 "__none__" 选出
+                if group_id == "__none__":
+                    if tt.groups:
+                        continue
+                elif group_id and group_id not in [str(g) for g in tt.groups]:
                     continue
                 rows.append(self._tt_summary(key, tt))
             rows.sort(key=lambda item: (item["owner_name"] or item["key"]))
@@ -4141,12 +4174,33 @@ class ScheduleLitePlugin(Star):
             group_id = self._query("group").strip()
             now = self._now()
             all_timetables = list(self.store.all().values())
+            group_counts: dict[str, int] = {}
+            for tt in all_timetables:
+                gids = [str(gid) for gid in tt.groups if gid] or [""]
+                for gid in dict.fromkeys(gids):
+                    group_counts[gid] = group_counts.get(gid, 0) + 1
+            group_options = [
+                {"id": gid or "__none__", "name": f"群 {gid}" if gid else "未绑定群", "count": n}
+                for gid, n in sorted(
+                    group_counts.items(),
+                    key=lambda item: (item[0] == "", int(item[0]) if item[0].isdigit() else 10**18, item[0]),
+                )
+            ]
             if group_id:
                 timetables = [
-                    tt for tt in all_timetables if group_id in tt.groups
+                    tt for tt in all_timetables
+                    if (not tt.groups if group_id == "__none__"
+                        else group_id in [str(g) for g in tt.groups])
                 ]
                 entries = await self._live_entries(timetables, now)
-                return self._ok({"items": entries, "total": len(entries), "groups": []})
+                return self._ok(
+                    {
+                        "items": entries,
+                        "total": len(entries),
+                        "groups": [],
+                        "group_options": group_options,
+                    }
+                )
 
             # 同一份课表可能绑了多个群，按群分组时会分别出现在每个群里；
             # 没有群记录的课表单独归到「未绑定群」。
@@ -4181,6 +4235,7 @@ class ScheduleLitePlugin(Star):
                     "items": flat,
                     "total": len(flat),
                     "groups": payload_groups,
+                    "group_options": group_options,
                 }
             )
         except Exception as exc:  # noqa: BLE001
