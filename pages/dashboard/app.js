@@ -356,7 +356,7 @@
       return {
         store_location: true, show_location: false, query_image: true, everyone_image: true, avatar_enabled: true,
         image_background: "", image_background_dim: 55, image_dark: false,
-        image_scrim: 45, image_quality: 85, help_image: true,
+        image_scrim: 45, image_quality: 85, help_image: true, prefer_web_help: true,
         everyone_page_size: 8, everyone_hide_idle_over: 12, everyone_active_days: 3,
         showcase_enabled: false, showcase_time: "22:30", showcase_min_minutes: 300, showcase_min_users: 2,
         recap_enabled: false, recap_weekday: 5, recap_time: "21:00", recap_mode: "week", recap_top: 5,
@@ -1155,6 +1155,7 @@
       renderBackgroundState(data.image_background || "");
       set("#set-avatar", "avatar_enabled");
       set("#set-help-image", "help_image");
+      set("#set-prefer-web-help", "prefer_web_help");
       set("#set-hide-idle", "everyone_hide_idle_over");
       set("#set-active-days", "everyone_active_days");
       set("#set-page-size", "everyone_page_size");
@@ -1289,6 +1290,7 @@
       image_quality: num("#set-image-quality"),
       avatar_enabled: $("#set-avatar").checked,
       help_image: $("#set-help-image").checked,
+      prefer_web_help: $("#set-prefer-web-help").checked,
       everyone_hide_idle_over: num("#set-hide-idle"),
       everyone_active_days: num("#set-active-days"),
       everyone_page_size: num("#set-page-size"),

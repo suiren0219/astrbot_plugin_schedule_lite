@@ -119,6 +119,12 @@
     "default": true,
     "hint": "开启后 /课表 帮助 会把 Markdown 手册渲染成几张图片，放在一条合并消息里发送；帮助文档和图片会留存在数据目录 help/ 下。"
   },
+  "prefer_web_help": {
+    "description": "🌐 优先网页版帮助",
+    "type": "bool",
+    "default": true,
+    "hint": "安装了「课表 Lite 网页伴侣」附属插件时，/课表 帮助 改为发网页链接不发图；未检测到网页伴侣时不受影响。"
+  },
   "everyone_image": {
     "description": "🎨 群友在上什么课用图片",
     "type": "bool",
