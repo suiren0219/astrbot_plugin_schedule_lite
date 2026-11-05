@@ -38,12 +38,15 @@ jobs:
       - uses: actions/checkout@v4
       - name: Ensure CJK fonts (best effort)
         continue-on-error: true
-        timeout-minutes: 4
+        timeout-minutes: 8
         run: |
           FONT="/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"
           if [ ! -f "$FONT" ]; then
             sudo timeout 120 apt-get update || true
-            sudo timeout 90 apt-get install -y --no-install-recommends fonts-noto-cjk || echo "::warning::CJK 字体安装失败，图片渲染测试将跳过"
+            # 61MB 的字体包在慢镜像下 90s 下载不完；加大超时并重试一次
+            sudo timeout 240 apt-get install -y --no-install-recommends fonts-noto-cjk \
+              || sudo timeout 240 apt-get install -y --no-install-recommends fonts-noto-cjk \
+              || echo "::warning::CJK 字体安装失败，图片渲染测试将跳过"
           fi
       - uses: actions/setup-python@v5
         with:
