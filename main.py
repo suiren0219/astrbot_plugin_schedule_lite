@@ -242,7 +242,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.10.6",
+    "v1.10.7",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -2207,6 +2207,37 @@ class ScheduleLitePlugin(Star):
             f"> 问题反馈 / 提 Issue：{ISSUE_URL}"
         )
 
+    def _web_companion_help_url(self, heading: str = "") -> str:
+        """网页伴侣（附属插件）发布的帮助地址；7 天内有效，过期视为已卸载。
+
+        heading 给定时按 help.md 的 `## 标题` 定位到 /help/N（与附属插件
+        的分节规则一致：引言是第 1 节，第 N 个 ## 在第 N+1 节）。
+        """
+        path = self._plugin_data_dir() / "web_companion.json"
+        base = ""
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if time.time() - float(data.get("updated_at", 0)) > 7 * 86400:
+                return ""
+            base = str(data.get("base_url", "")).rstrip("/")
+        except Exception:  # noqa: BLE001
+            return ""
+        if not base:
+            return ""
+        if not heading:
+            return f"{base}/help"
+        try:
+            md = (Path(PLUGIN_DIR) / "docs" / "help.md").read_text(encoding="utf-8")
+        except OSError:
+            return f"{base}/help"
+        index = 0
+        for line in md.splitlines():
+            if line.startswith("## "):
+                index += 1
+                if line[3:].strip() == heading:
+                    return f"{base}/help/{index + 1}"
+        return f"{base}/help"
+
     async def _h_help(self, event, args: str):
         raw = args.strip()
         token = raw.lower()
@@ -2217,12 +2248,37 @@ class ScheduleLitePlugin(Star):
                 yield event.plain_result(HELP_INDEX_TEXT)
             return
 
+        # 装了网页伴侣时优先发链接，群里不再刷帮助长图
+        web_help = self._web_companion_help_url() if self._cfg("prefer_web_help", True) else ""
         key = self._help_category(raw)
         if not raw:
+            if web_help:
+                yield event.plain_result(
+                    HELP_INDEX_TEXT + f"\n\n🌐 网页版手册（不刷屏）：{web_help}"
+                )
+                return
             yield event.plain_result(HELP_INDEX_TEXT)
             return
         if not key:
+            if web_help:
+                yield event.plain_result(
+                    f"没有找到分类「{raw}」。\n\n{HELP_INDEX_TEXT}"
+                    f"\n\n🌐 网页版手册（不刷屏）：{web_help}"
+                )
+                return
             yield event.plain_result(f"没有找到分类「{raw}」。\n\n{HELP_INDEX_TEXT}")
+            return
+        if web_help:
+            if key == "all":
+                link = web_help.rsplit("/help", 1)[0] + "/help/all"
+                name = "完整手册"
+            else:
+                link = self._web_companion_help_url(HELP_CATEGORIES[key]["headings"][0])
+                name = HELP_CATEGORIES[key]["title"]
+            yield event.plain_result(
+                f"📖 课表 Lite · {name}（网页版，不刷屏）\n{link}\n"
+                "浏览器打开即可；卸载网页伴侣后会恢复图片版帮助。"
+            )
             return
 
         try:
@@ -3947,6 +4003,7 @@ class ScheduleLitePlugin(Star):
         "image_quality",
         "image_dark",
         "help_image",
+        "prefer_web_help",
         "image_width",
         "everyone_page_size",
         "everyone_hide_idle_over",
@@ -4004,6 +4061,7 @@ class ScheduleLitePlugin(Star):
                 "query_image",
                 "image_dark",
                 "help_image",
+                "prefer_web_help",
                 "showcase_enabled",
                 "recap_enabled",
                 "holiday_enabled",

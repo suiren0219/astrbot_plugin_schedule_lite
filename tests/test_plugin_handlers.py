@@ -746,6 +746,63 @@ def test_help_index_lists_categories(plugin):
     assert "/issues" in out[0]
 
 
+def test_web_companion_help_link(plugin, tmp_path):
+    """装了网页伴侣时 /课表 帮助 改发链接，不发帮助长图。"""
+    import json as jsonlib
+    import time as time_mod
+
+    import main as plugin_main
+
+    # 未安装伴侣：行为不变
+    assert plugin._web_companion_help_url() == ""
+    event = _Event()
+    out = asyncio.run(_collect(plugin._h_help(event, "")))
+    assert out == [plugin_main.HELP_INDEX_TEXT]
+
+    # 写入伴侣标记（模拟附属插件发布）
+    marker = plugin._plugin_data_dir() / "web_companion.json"
+    marker.write_text(
+        jsonlib.dumps(
+            {"base_url": "https://kb.example.com/schedule", "updated_at": time_mod.time()}
+        ),
+        encoding="utf-8",
+    )
+    url = plugin._web_companion_help_url()
+    assert url == "https://kb.example.com/schedule/help"
+    # 分类定位：help.md 第一个 ## 是「快速开始」→ 第 2 节
+    assert plugin._web_companion_help_url("快速开始") == "https://kb.example.com/schedule/help/2"
+    assert plugin._web_companion_help_url("不存在的节").endswith("/help")
+
+    event = _Event()
+    out = asyncio.run(_collect(plugin._h_help(event, "")))
+    assert "kb.example.com/schedule/help" in out[0]
+    # 查询分类 → 定位到对应章节页
+    event = _Event()
+    out = asyncio.run(_collect(plugin._h_help(event, "查询")))
+    assert out[0].startswith("📖") and "/help/" in out[0]
+
+    # 过期标记视为已卸载
+    marker.write_text(
+        jsonlib.dumps(
+            {"base_url": "https://kb.example.com/schedule", "updated_at": time_mod.time() - 8 * 86400}
+        ),
+        encoding="utf-8",
+    )
+    assert plugin._web_companion_help_url() == ""
+
+    # prefer_web_help=False 时不联动
+    marker.write_text(
+        jsonlib.dumps(
+            {"base_url": "https://kb.example.com/schedule", "updated_at": time_mod.time()}
+        ),
+        encoding="utf-8",
+    )
+    plugin.config["prefer_web_help"] = False
+    event = _Event()
+    out = asyncio.run(_collect(plugin._h_help(event, "")))
+    assert out == [plugin_main.HELP_INDEX_TEXT]
+
+
 def test_help_category_markdown_is_extracted(plugin):
     assert plugin._help_category("入门") == "导入"
     assert plugin._help_category("调休") == "请假"
