@@ -69,6 +69,9 @@
     themeMode: "auto",
     bridgeDark: null,
     restorePayload: null,
+    groupFilter: "",            // 两个视图共用的群聊筛选
+    groupOptions: [],
+    collapsedGroups: new Set(), // 群聊收纳：默认全部收起
   };
 
   const esc = (value) =>
@@ -316,6 +319,10 @@
 
   /* ---------------------------------------------------------------- demo */
 
+  function demoGroups() {
+    return [];
+  }
+
   function demo(path, body) {
     const now = new Date();
     const pad = (n) => String(n).padStart(2, "0");
@@ -326,11 +333,14 @@
         users: 0, courses: 0, groups: 0, today, weekday,
         status_counts: {},
         holiday: { name: "", off: false, workday: false, source: "" },
+        group_options: [],
         config: { store_location: true, show_location: false, everyone_image: true, help_image: true },
 
       };
     }
-    if (path === "live") return { items: [], total: 0 };
+    if (path === "live") {
+      return { items: [], total: 0, groups: [], group_options: demoGroups(params) };
+    }
     if (path === "timetables") return { items: [], total: 0 };
     if (path === "sections") {
       return {
@@ -404,10 +414,36 @@
         .filter(([, n]) => n > 0)
         .map(([label, n]) => `<span class="chip">${esc(label)}<b>${n}</b></span>`);
       $("#status-chips").innerHTML = chips.length ? chips.join("") : '<span class="muted">今天还没有状态数据</span>';
+      if (Array.isArray(data.group_options)) renderGroupOptions(data.group_options);
       await loadLive();
     } catch (err) {
       toast(`概览加载失败：${err.message}`);
     }
+  }
+
+  /** 两个视图共用的群下拉：同一筛选值，切换标签也不丢。 */
+  function renderGroupOptions(options) {
+    state.groupOptions = options;
+    const html = ['<option value="">全部群</option>'].concat(
+      options.map((g) => `<option value="${esc(g.id)}">${esc(g.name)} · ${g.count} 人</option>`)
+    ).join("");
+    ["#live-group-filter", "#record-group-filter"].forEach((sel) => {
+      const el = $(sel);
+      if (!el) return;
+      el.innerHTML = html;
+      el.value = options.some((g) => g.id === state.groupFilter) ? state.groupFilter : "";
+    });
+    if (!options.some((g) => g.id === state.groupFilter)) state.groupFilter = "";
+  }
+
+  function setGroupFilter(value) {
+    state.groupFilter = value || "";
+    ["#live-group-filter", "#record-group-filter"].forEach((sel) => {
+      const el = $(sel);
+      if (el) el.value = state.groupFilter;
+    });
+    loadLive();
+    if (state.view === "data") loadRecords();
   }
 
   function avatarTag(name, url) {
@@ -418,15 +454,19 @@
 
   async function loadLive() {
     try {
-      const data = await apiGet("live");
+      const data = await apiGet("live", state.groupFilter ? { group: state.groupFilter } : {});
+      if (Array.isArray(data.group_options)) renderGroupOptions(data.group_options);
       const groups = data.groups || [];
       if (groups.length) {
         $("#live-list").innerHTML = groups.map((group) => {
           const items = group.items || [];
+          const gid = String(group.id ?? "");
+          // 默认全部收起；用户手动展开过的群才保留展开状态
+          const collapsed = !state.collapsedGroups.has(`open:${gid}`);
           return `
-            <section class="live-group">
-              <div class="live-group-head">
-                <b>${esc(group.name || group.id || "未分组")}</b>
+            <section class="live-group${collapsed ? " collapsed" : ""}" data-group="${esc(gid)}">
+              <div class="live-group-head" role="button" tabindex="0" aria-expanded="${!collapsed}">
+                <b><span class="live-group-toggle">▾</span>${esc(group.name || group.id || "未分组")}</b>
                 <span>${items.length} 人</span>
               </div>
               <div class="live-group-body">
@@ -434,6 +474,20 @@
               </div>
             </section>`;
         }).join("");
+        $("#live-list").querySelectorAll(".live-group-head").forEach((head) => {
+          const toggle = () => {
+            const section = head.closest(".live-group");
+            const opened = section.classList.toggle("collapsed") === false;
+            head.setAttribute("aria-expanded", String(opened));
+            const key = `open:${section.dataset.group}`;
+            if (opened) state.collapsedGroups.add(key);
+            else state.collapsedGroups.delete(key);
+          };
+          head.addEventListener("click", toggle);
+          head.addEventListener("keydown", (ev) => {
+            if (ev.key === "Enter" || ev.key === " ") { ev.preventDefault(); toggle(); }
+          });
+        });
         return;
       }
       const items = data.items || [];
@@ -458,8 +512,11 @@
 
   async function loadRecords() {
     const q = $("#search").value.trim();
+    const params = {};
+    if (q) params.q = q;
+    if (state.groupFilter) params.group = state.groupFilter;
     try {
-      const data = await apiGet("timetables", q ? { q } : {});
+      const data = await apiGet("timetables", params);
       state.records = data.items || [];
       const body = $("#record-body");
       body.innerHTML = state.records.length
@@ -1343,6 +1400,22 @@
     tab.addEventListener("click", () => switchView(tab.dataset.view));
   });
   $("#refresh-live").addEventListener("click", loadLive);
+  ["#live-group-filter", "#record-group-filter"].forEach((sel) => {
+    $(sel).addEventListener("change", (ev) => setGroupFilter(ev.target.value));
+  });
+  $("#live-expand-all").addEventListener("click", () => {
+    const sections = $("#live-list").querySelectorAll(".live-group");
+    const anyCollapsed = [...sections].some((el) => el.classList.contains("collapsed"));
+    sections.forEach((el) => {
+      el.classList.toggle("collapsed", !anyCollapsed);
+      const key = `open:${el.dataset.group}`;
+      if (anyCollapsed) state.collapsedGroups.add(key);
+      else state.collapsedGroups.delete(key);
+      const head = el.querySelector(".live-group-head");
+      if (head) head.setAttribute("aria-expanded", String(anyCollapsed));
+    });
+    $("#live-expand-all").textContent = anyCollapsed ? "收纳全部" : "展开全部";
+  });
   $("#search").addEventListener("input", () => {
     clearTimeout(loadRecords.timer);
     loadRecords.timer = setTimeout(loadRecords, 220);
