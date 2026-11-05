@@ -10,6 +10,7 @@
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -24,7 +25,8 @@ from schedule_lite_core import render  # noqa: E402
 W, H = 1920, 1080
 FPS = 30
 SCENE = 7.0
-TOTAL_TIME = SCENE * 9
+SCENES = 10
+TOTAL_TIME = SCENE * SCENES
 FRAMES_DIR = Path(__file__).resolve().parent / "build" / "elements"
 OUT_MP4 = Path(__file__).resolve().parent / "promo.mp4"
 AVATAR_DIR = Path("D:/tmp/card_test/av")
@@ -235,6 +237,9 @@ def build_assets() -> dict[str, Image.Image]:
 
     if WEB_SHOT.exists():
         assets["web"] = Image.open(WEB_SHOT).convert("RGB")
+    dash = Path(__file__).resolve().parent / "assets" / "dashboard-data.png"
+    if dash.exists():
+        assets["dashboard"] = Image.open(dash).convert("RGB")
     return assets
 
 
@@ -287,23 +292,31 @@ def build_clips(assets: dict[str, Image.Image]) -> list:
         png.save(path)
         return png
 
-    # ---- S1 开场
+    # ---- S1 开场：钩子问句 + 品牌 + 双行小字
     s = 0.0
+    hook = Image.new("RGBA", (1700, 80), (0, 0, 0, 0))
+    ImageDraw.Draw(hook).text((850, 40), "可以在群聊里，看到群友上课？", font=font(True, 44),
+                              fill="#93C5FD", anchor="mm")
+    clips.append(slide(hook, (W // 2 - 850, 176), scene=s, delay=0.15, dy=24))
     brand = Image.new("RGBA", (600, 60), (0, 0, 0, 0))
-    ImageDraw.Draw(brand).text((300, 30), "SCHEDULE LITE", font=font(True, 34),
+    ImageDraw.Draw(brand).text((300, 30), "SCHEDULE LITE", font=font(True, 30),
                                fill="#60A5FA", anchor="mm")
-    clips.append(slide(brand, (W // 2 - 300, 266), scene=s, delay=0.2, dy=26))
+    clips.append(slide(brand, (W // 2 - 300, 262), scene=s, delay=0.3, dy=22))
     title = Image.new("RGBA", (1200, 200), (0, 0, 0, 0))
-    ImageDraw.Draw(title).text((600, 100), "课表 Lite", font=font(True, 132), fill=TEXT, anchor="mm")
-    clips.append(pop(title, (W // 2, 440), scene=s, delay=0.35, dur=SCENE - 0.4))
-    sub = Image.new("RGBA", (1400, 80), (0, 0, 0, 0))
-    ImageDraw.Draw(sub).text((700, 40), "把课表变成群里的公共设施", font=font(False, 40),
+    ImageDraw.Draw(title).text((600, 100), "课表 Lite", font=font(True, 128), fill=TEXT, anchor="mm")
+    clips.append(pop(title, (W // 2, 430), scene=s, delay=0.45, dur=SCENE - 0.4))
+    sub = Image.new("RGBA", (1400, 70), (0, 0, 0, 0))
+    ImageDraw.Draw(sub).text((700, 34), "把课表变成群里的公共设施", font=font(False, 36),
                              fill=MUTED, anchor="mm")
-    clips.append(slide(sub, (W // 2 - 700, 552), scene=s, delay=0.65, dy=26))
+    clips.append(slide(sub, (W // 2 - 700, 560), scene=s, delay=0.7, dy=24))
+    sub2 = Image.new("RGBA", (1400, 70), (0, 0, 0, 0))
+    ImageDraw.Draw(sub2).text((700, 34), "让你的 QQ 机器人，提醒上课。", font=font(False, 34),
+                              fill="#93C5FD", anchor="mm")
+    clips.append(slide(sub2, (W // 2 - 700, 628), scene=s, delay=0.9, dy=24))
     b1 = badge_layer("v1.10.7", fg="#BFDBFE", bg=(30, 58, 95), outline="#3B82F6")
-    clips.append(pop(b1, (W // 2 - 180, 736), scene=s, delay=0.95))
+    clips.append(pop(b1, (W // 2 - 180, 780), scene=s, delay=1.1))
     b2 = badge_layer("179 tests passed", fg=MUTED)
-    clips.append(pop(b2, (W // 2 + 120, 736), scene=s, delay=1.1))
+    clips.append(pop(b2, (W // 2 + 120, 780), scene=s, delay=1.25))
 
     # ---- S2 导入
     s = SCENE
@@ -374,8 +387,20 @@ def build_clips(assets: dict[str, Image.Image]) -> list:
     for i, pill in enumerate(pills):
         clips.append(pop(pill, (480, 660 + i * 128), scene=s, delay=1.0 + i * 0.2))
 
-    # ---- S8 安全部署
-    s = 7 * SCENE
+    # ---- S8 后台控制台
+    if "dashboard" in assets:
+        s = 7 * SCENE
+        tl, pos = text_layer(96, 160, 620, "后台控制台，管理不刷屏", [
+            "课表 / 请假 / 调课 / 群绑定，后台直接改",
+            "群聊筛选 + 一键收纳，几十个群也不乱",
+            "节假日、补班映射、全部运行设置",
+        ], title_size=56, body_size=30)
+        clips.append(slide(tl, pos, scene=s, delay=0.15, dy=30))
+        shot = paste_shot(assets["dashboard"], assets["dashboard"], (760, 90, W - 70, H - 130))
+        clips.append(slide(shot, (0, 0), scene=s, delay=0.3, dx=W, ease_dur=0.9))
+
+    # ---- S9 安全部署
+    s = 8 * SCENE
     title_img = Image.new("RGBA", (1200, 120), (0, 0, 0, 0))
     d = ImageDraw.Draw(title_img)
     tf = font(True, 60)
@@ -403,8 +428,8 @@ def build_clips(assets: dict[str, Image.Image]) -> list:
                               font=font(False, 26), fill=MUTED, anchor="mm")
     clips.append(slide(note, (W // 2 - 700, 866), scene=s, delay=1.4, dy=20))
 
-    # ---- S9 结尾
-    s = 8 * SCENE
+    # ---- S10 结尾
+    s = 9 * SCENE
     title = Image.new("RGBA", (1200, 160), (0, 0, 0, 0))
     ImageDraw.Draw(title).text((600, 80), "课表 Lite", font=font(True, 96), fill=TEXT, anchor="mm")
     clips.append(pop(title, (W // 2, 330), scene=s, delay=0.2, dur=SCENE - 0.4))
@@ -430,14 +455,38 @@ def build_clips(assets: dict[str, Image.Image]) -> list:
     clips.append(slide(note, (W // 2 - 750, 900), scene=s, delay=1.7, dy=20))
 
     # ---- 各幕进度点
-    for i in range(9):
-        clips.append(slide(chrome_layer(i, 9), (0, 0), scene=i * SCENE, delay=0.0,
+    for i in range(SCENES):
+        clips.append(slide(chrome_layer(i, SCENES), (0, 0), scene=i * SCENE, delay=0.0,
                            dur=SCENE, fade=0.3))
     return clips
 
 
+def build_audio() -> list:
+    """配音轨（每幕起点 +0.35s）+ BGM 轨（音量为配音的 30%，循环、首尾淡化）。"""
+    import moviepy.audio.fx as afx
+    from moviepy import AudioFileClip, CompositeAudioClip
+
+    tracks = []
+    narration_dir = FRAMES_DIR.parent / "narration"
+    for scene in range(1, SCENES + 1):
+        wav = narration_dir / f"scene{scene:02d}.wav"
+        if wav.exists() and not args.no_narration:
+            tracks.append(AudioFileClip(str(wav)).with_start((scene - 1) * SCENE + 0.35))
+    bgm_path = args.bgm
+    if bgm_path:
+        bgm = (AudioFileClip(str(bgm_path))
+               .with_effects([vfx.AudioLoop(duration=TOTAL_TIME),
+                              afx.MultiplyVolume(args.bgm_volume),
+                              afx.AudioFadeIn(1.0), afx.AudioFadeOut(2.5)]))
+        tracks.append(bgm)
+    return [CompositeAudioClip(tracks)] if tracks else []
+
+
 def encode(clips: list) -> None:
     video = CompositeVideoClip(clips, size=(W, H)).with_duration(TOTAL_TIME)
+    audio = build_audio()
+    if audio:
+        video = video.with_audio(audio[0])
     video.write_videofile(
         str(OUT_MP4), fps=FPS, codec="libx264", preset="medium",
         ffmpeg_params=["-crf", "20"], logger=None,
@@ -445,9 +494,17 @@ def encode(clips: list) -> None:
 
 
 def main() -> None:
+    global args
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--bgm", default="", help="BGM 音频路径（如星茶会）；留空则无 BGM")
+    parser.add_argument("--bgm-volume", type=float, default=0.3,
+                        help="BGM 音量，相对配音的倍数（默认 0.3）")
+    parser.add_argument("--no-narration", action="store_true", help="不合成配音轨")
+    args = parser.parse_args()
     assets = build_assets()
     clips = build_clips(assets)
     encode(clips)
+    print("narration:", "off" if args.no_narration else "on", "| bgm:", args.bgm or "none")
     print("video:", OUT_MP4)
 
 
