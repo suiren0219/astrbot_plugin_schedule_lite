@@ -820,6 +820,11 @@ def test_avatar_cache_and_fallback(plugin, tmp_path):
 def test_everyone_passes_cached_avatar_to_renderer(image_plugin, tmp_path):
     from PIL import Image
 
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+
     avatar_dir = tmp_path / "cache" / "avatars"
     avatar_dir.mkdir(parents=True)
     Image.new("RGB", (120, 120), (30, 90, 200)).save(avatar_dir / "10001.png", "PNG")
@@ -1386,6 +1391,11 @@ def test_day_card_title_matches_query_date(image_plugin):
     """查明天时卡片标题必须是「明日课表」，不能写死今日。"""
     import main as plugin_main
 
+    from schedule_lite_core import render
+
+    if not render.available():
+        pytest.skip("本机没有可用的中文字体")
+
     captured = {}
 
     def fake_render(rows, out_dir, **kwargs):
@@ -1857,6 +1867,10 @@ def test_rank_reverse_option(plugin):
 def test_broadcast_claim_released_on_failure(tmp_path):
     import main as plugin_main
     from schedule_lite_core.model import Course, Timetable
+    from schedule_lite_core import render
+
+    # 有字体时图片链 + 文字兜底每轮各发一次；无字体时只有文字链
+    per_round = 2 if render.available() else 1
 
     class _FailingContext:
         def __init__(self):
@@ -1893,24 +1907,24 @@ def test_broadcast_claim_released_on_failure(tmp_path):
 
     # 第 1 轮：图片失败 → 文字兜底再试一次；失败 1 次 < 3，名额退回待重试
     asyncio.run(plugin._check_scheduled_broadcasts(now))
-    assert ctx.calls == 2
+    assert ctx.calls == per_round
     assert plugin._broadcast_failures["showcase"]["g1"][1] == 1
     assert plugin._broadcast_state.get("showcase", {}).get("g1") is None
 
     # 第 2 轮：继续失败，计数 2
     asyncio.run(plugin._check_scheduled_broadcasts(now))
-    assert ctx.calls == 4
+    assert ctx.calls == per_round * 2
     assert plugin._broadcast_failures["showcase"]["g1"][1] == 2
 
     # 第 3 轮：达到 3 次，名额保留，当天不再重试
     asyncio.run(plugin._check_scheduled_broadcasts(now))
-    assert ctx.calls == 6
+    assert ctx.calls == per_round * 3
     assert plugin._broadcast_failures["showcase"]["g1"][1] == 3
     assert plugin._broadcast_state.get("showcase", {}).get("g1") == now.date().isoformat()
 
     # 第 4 轮：不再调用发送
     asyncio.run(plugin._check_scheduled_broadcasts(now))
-    assert ctx.calls == 6
+    assert ctx.calls == per_round * 3
 
 
 def test_broadcast_failures_reset_next_day(tmp_path):
