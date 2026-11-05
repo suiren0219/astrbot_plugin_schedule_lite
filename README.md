@@ -268,6 +268,9 @@ Miuix 目前只提供 Compose Multiplatform 组件，没有可直接引用的 We
 
 ## 安全
 
+部署与端口暴露的完整说明（放行步骤、裸 IP 风险、域名反代最稳组合）见
+[docs/deploy-security.md](docs/deploy-security.md)。
+
 从用户给的链接导入时，默认只允许公网 http/https，拒绝 127.0.0.1、局域网和云元数据地址，
 并手动跟随重定向、每一跳都重新检查，避免把机器人当作内网代理（SSRF）。确实需要内网导入时打开
 `allow_private_network`。
