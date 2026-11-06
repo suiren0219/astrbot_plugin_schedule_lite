@@ -1,11 +1,17 @@
 # 配音文案（10 幕 · 每幕 ≤35 字 · 目标 ≤6.5s/段）
 
-- 后端一：**edge-tts**（默认，`zh-CN-XiaoxiaoNeural`，rate +8%——语速微快更精神）
-- 后端二：**MiMo 配音 API**（自己服务器）——`docs/promo/tts.json` 填端点与密钥后
-  `python make_audio.py --backend mimo` 一键切换；接口模板按 OpenAI
-  `/v1/audio/speech` 兼容格式，其他协议改 `make_audio.py::_mimo_tts`
-- 节奏：短句 + 顿号断点，让 TTS 有停顿起伏；每幕配音起点为幕开始后 0.35s
-- BGM：星茶会（服务器文件），音量为配音的 30%，全程循环、首尾淡入淡出
+- 后端一：**edge-tts**（`python make_audio.py`，`zh-CN-XiaoxiaoNeural` rate +8%）
+- 后端二 **MiMo v2.5 TTS（当前成片使用）**：`python make_audio.py --backend mimo`
+  - 协议：`/v1/chat/completions`，`messages` 必须含 user + assistant 两个角色，
+    `modalities: ["text","audio"]`、`audio.voice` 指定音色；返回
+    `choices[0].message.audio.data` 是 base64 WAV（24kHz 单声道），解码落盘
+  - 可用音色：`mimo_default / 冰糖 / 茉莉 / 苏打 / 白桦 / Mia / Chloe / Milo / Dean`
+    （**没有「龙井」**，当前用「茉莉」，语气指令写在 tts.json 的 `instruction`）
+  - 配置：`docs/promo/tts.json` 模板（**gitignored**），密钥只放文件里或环境变量
+    `MIMO_API_KEY`，**永不进仓库**；`--backend mimo` 会自动 atempo 适配到 ≤6.6s
+- 节奏：短句 + 顿号断点；每幕配音起点为幕开始后 0.35s；超长段 atempo 无损提速
+- 配音增益：`make_video.py --voice-volume 2.0`（默认，实测峰值 -0.5dB 无削波）
+- BGM：**由后期添加**；管线仍留 `--bgm <文件>`（音量默认配音的 30%、循环、首尾淡化）
 
 | 幕 | 文案 |
 | --- | --- |
