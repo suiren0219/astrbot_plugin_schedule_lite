@@ -2013,8 +2013,9 @@ def test_broadcast_failures_reset_next_day(tmp_path):
         term_start=(today - timedelta(days=today.isoweekday() - 1)).isoformat(),
         total_weeks=20,
         courses=[
-            Course(name="课", day=today.isoweekday(), weeks=[1], start="08:00", end="14:00"),
-            Course(name="课", day=next_day.isoweekday(), weeks=[1], start="08:00", end="14:00"),
+            # weeks 必须覆盖前两周：今天若是周日，明天就属于第 2 周
+            Course(name="课", day=today.isoweekday(), weeks=[1, 2], start="08:00", end="14:00"),
+            Course(name="课", day=next_day.isoweekday(), weeks=[1, 2], start="08:00", end="14:00"),
         ],
         groups=["g1"], group_origins={"g1": "test:group:g1"},
     )
