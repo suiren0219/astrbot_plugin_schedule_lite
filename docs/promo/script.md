@@ -2,11 +2,17 @@
 
 - 规格：1920×1080 · 30fps · 9 幕 × 7s ≈ 63 秒
 - 风格：深色底 + miuix 卡片，真实渲染素材出镜
-- 生成：`python docs/promo/make_video.py`（动效版）→ `promo.mp4`
-- 动效：MoviePy（github.com/Zulko/moviepy）时间线——卡片从右滑入（ease-out-cubic）、
-  徽章/倒计时条回弹弹入（ease-out-back）、文字上滑淡入、幕间交叉淡化；元素全部预渲染成
-  透明 PNG 再合成，渲染快且可复现
-- 依赖：`pip install moviepy imageio-ffmpeg`（Pillow 已随主插件）
+- 生成（当前成片）：`python docs/promo/make_mg.py` → `promo.mp4`
+- 动效引擎：移植自 [drawai](https://github.com/fourzkw/dsh-drawai) 的
+  `skills/mg-code-video` 方法论——分镜表驱动、确定性逐帧渲染（PIL 合成 + ffmpeg pipe）：
+  - 全局缓推镜头（Ken Burns，每幕 1.0→1.024 推近）
+  - 字符级动态排版（逐字上浮 + 回弹过冲）
+  - 数字滚动（179 tests / 30 人 / 36 天 / 8 天）
+  - 卡片光扫 + 圆角投影贴图
+  - 幕间横向滑动转场 + 边界光带（不是淡入淡出）
+  - 背景漂浮光点、图形隐喻（连线生长、警示三角、脉冲圆环）
+- 旧版（可参考）：`python docs/promo/make_video.py`（MoviePy 时间线版）
+- 依赖：`pip install imageio-ffmpeg`（Pillow 已随主插件；旧版另需 moviepy）
 - 无配音，字幕承载信息；B 站/群动态投稿可直接用
 
 | 幕 | 主题 | 画面 | 字幕文案 |
