@@ -143,6 +143,14 @@ def _safe_int(value, default: int = 0) -> int:
 GITHUB_URL = "https://github.com/suiren0219/astrbot_plugin_schedule_lite"
 ISSUE_URL = f"{GITHUB_URL}/issues"
 
+# 只有「文件名看起来像课表」的附件才会被读取；避免任何人发个 .json/.txt
+# 资料就被当成课表解析。显式 /课表 导入 带附件也走同一判断。
+TIMETABLE_FILE_EXTS = (".ics", ".json", ".csv", ".wakeup_schedule", ".txt")
+TIMETABLE_NAME_KEYWORDS = (
+    "课表", "课程", "schedule", "timetable", "calendar", "class",
+    "wakeup", "nexio", "拾光", "ical", "course", "ics",
+)
+
 
 ONBOARDING_TEXT = """👋 你还没有绑定课表，先完成第一步：
 
@@ -242,7 +250,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.10.7",
+    "v1.19",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -1153,10 +1161,9 @@ class ScheduleLitePlugin(Star):
         text = (event.message_str or "").strip()
         if text.startswith("/课表") or text.startswith("课表"):
             return  # 已由命令路径处理
-        if event.get_group_id():
-            filename = str(getattr(file_comps[0], "name", "") or "").lower()
-            if not filename.endswith((".ics", ".json", ".csv", ".wakeup_schedule")):
-                return
+        filename = str(getattr(file_comps[0], "name", "") or "").lower()
+        if not self._looks_like_timetable_file(filename, group=bool(event.get_group_id())):
+            return
         if not self._session_allowed(event):
             return  # 会话未启用时静默忽略，避免在无关群里响应文件
         event.stop_event()
@@ -1358,6 +1365,28 @@ class ScheduleLitePlugin(Star):
                 "如果周次对不上，发送 /课表 学期 2026-09-07 修正第 1 周周一。"
             )
         yield event.plain_result(text)
+
+    @staticmethod
+    def _looks_like_timetable_file(filename: str, *, group: bool = False) -> bool:
+        """先按后缀、再按文件名判断是不是课表相关文件。
+
+        - .ics / .wakeup_schedule 本身就是课表格式，直接放行
+        - .json / .csv / .txt 太通用，必须文件名带课表关键词才放行
+        - 群里更严：无关键词的通用后缀一律不碰
+        """
+        name = str(filename or "").strip().lower()
+        if not name:
+            return False
+        if not name.endswith(TIMETABLE_FILE_EXTS):
+            return False
+        if name.endswith((".ics", ".wakeup_schedule")):
+            return True
+        if any(word in name for word in TIMETABLE_NAME_KEYWORDS):
+            return True
+        # 群里要求更严格；私聊允许常见的「星期/周次」类导出名兜底
+        if group:
+            return False
+        return any(word in name for word in ("周课表", "课", "表", "term", "week"))
 
     @staticmethod
     def _messages(event):
@@ -1772,6 +1801,9 @@ class ScheduleLitePlugin(Star):
         filename = str(getattr(comp, "name", "") or "").lower()
         if filename.endswith((".xlsx", ".xls")):
             raise ImportFailure("暂不支持 Excel，请在表格软件里另存为 CSV 后再发")
+        # 不是课表相关的文件名，直接不读：不下载、不解码、不尝试解析
+        if not self._looks_like_timetable_file(filename):
+            raise ImportFailure("文件名不像课表文件，请把导出的 .ics / 课表.json 等发给机器人")
         try:
             path = str(await asyncio.to_thread(lambda: comp.file) or "")
         except Exception as e:  # noqa: BLE001
@@ -1793,8 +1825,16 @@ class ScheduleLitePlugin(Star):
         return text
 
     async def _attachment_text(self, event) -> str:
+        """只读「看起来像课表」的附件；不合格的直接跳过。
+
+        显式 /课表 导入 <口令> 带了个无关附件时，仍要走粘贴的口令，
+        所以这里吞掉文件名不合格的 ImportFailure，而不是让整个导入失败。
+        """
         for comp in self._messages(event):
             if comp.__class__.__name__ != "File":
+                continue
+            filename = str(getattr(comp, "name", "") or "").lower()
+            if not self._looks_like_timetable_file(filename):
                 continue
             return await self._file_component_text(comp)
         return ""
