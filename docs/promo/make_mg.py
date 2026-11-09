@@ -604,6 +604,7 @@ def build_audio(out: Path) -> Path | None:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--frame", type=float, default=None, help="只导出某一时刻静帧")
+    parser.add_argument("--silent", action="store_true", help="不混配音，输出无声版")
     parser.add_argument("--fps", type=int, default=FPS)
     args = parser.parse_args()
     BUILD.mkdir(parents=True, exist_ok=True)
@@ -619,7 +620,7 @@ def main() -> None:
     import imageio_ffmpeg
     from PIL import Image as PILImage
 
-    audio = build_audio(BUILD / "audio.m4a")
+    audio = None if args.silent else build_audio(BUILD / "audio.m4a")
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
     total_frames = int(TOTAL * args.fps)
     cmd = [ffmpeg, "-y", "-loglevel", "error",
