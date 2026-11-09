@@ -28,7 +28,7 @@ ROOT_DIRS = (
     "pages/dashboard",
     "schedule_lite_core",
 )
-SKIP_DIRS = {"__pycache__", ".pytest_cache"}
+SKIP_DIRS = {"__pycache__", ".pytest_cache", "promo", "build", "assets"}
 
 
 def collect_files(root: Path) -> list[Path]:
