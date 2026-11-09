@@ -19,6 +19,7 @@ BLBot 式课表功能的 AstrBot 独立实现，适合部署在 **QQ 群**里：
 ## 功能
 
 - 多来源导入：Nexio 课程表分享口令/JSON/ICS、WakeUp 课程表口令/备份、iCalendar(.ics)、拾光课程表 JSON、通用 JSON/CSV
+- 文件先按名称过滤：自动导入只认 `.ics` / `.wakeup_schedule`，以及文件名带「课表 / 课程 / schedule」等关键词的 `.json` / `.csv` / `.txt`；其他文件不会被下载或解析
 - 广泛的 ICS 兼容：Nexio 课表、拾光课程表、WakeUp 等多数课表 App 都能导出
   `.ics`，导出文件或分享链接直接导入即可；课程名、教师、地点、周次会从标题/描述里尽量提取
 - WebUI 控制台：AstrBot 插件页里管理课表数据（增删改、按课程名过滤、按群筛选）、节假日缓存和全部运行设置；支持在后台粘贴口令/链接/JSON/ICS 或文件直接导入；支持浅色、深色、跟随系统三态主题，并跟随 AstrBot 后台主题变化

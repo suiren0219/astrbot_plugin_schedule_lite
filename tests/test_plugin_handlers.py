@@ -2367,6 +2367,46 @@ def test_bare_file_auto_import_group_extension_filter(plugin, tmp_path):
     assert outs == []
 
 
+def test_file_import_requires_timetable_filename(plugin, tmp_path):
+    """文件名不像课表时，不读文件、不解析；口令/文本粘贴不受影响。"""
+    from astrbot.api.message_components import File
+
+    from .test_importers import ICS_SAMPLE
+
+    ics = tmp_path / "课表.ics"
+    ics.write_text(ICS_SAMPLE, encoding="utf-8")
+    json_file = tmp_path / "课表.json"
+    json_file.write_text(json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False), encoding="utf-8")
+    for name in ("课表.ics", "课表.json", "schedule.json", "timetable.csv", "课程表.txt"):
+        path = ics if name.endswith(".ics") else json_file
+        event = _Event("", group="g1")
+        event.message_obj.message = [File(name=name, file=str(path))]
+        assert plugin._looks_like_timetable_file(name, group=True), name
+
+    # 常见的无关文件：连后缀都不对
+    for name in ("资料.zip", "作业.pdf", "photo.png", "x.xlsx"):
+        assert not plugin._looks_like_timetable_file(name, group=True), name
+
+    # 群里通用后缀没关键词 → 不读、不导入
+    data = tmp_path / "data.json"
+    data.write_text(json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False), encoding="utf-8")
+    event = _Event("", group="g1")
+    event.message_obj.message = [File(name="data.json", file=str(data))]
+    assert asyncio.run(_collect(plugin.cmd_file_auto_import(event))) == []
+    assert not plugin.store.get("test:10001")
+
+    # 私聊同样不再「任意文件都读」
+    event = _Event("")
+    event.message_obj.message = [File(name="笔记.txt", file=str(data))]
+    assert asyncio.run(_collect(plugin.cmd_file_auto_import(event))) == []
+
+    # 显式命令带无关附件：附件被拒，但显式粘贴的口令仍能导入
+    event = _Event("/课表 导入", group="g1")
+    event.message_obj.message = [File(name="资料.json", file=str(data))]
+    outs = asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
+    assert any("已导入课表" in line for line in outs)
+
+
 def test_bare_file_skips_command_messages(plugin):
     from astrbot.api.message_components import File
 
