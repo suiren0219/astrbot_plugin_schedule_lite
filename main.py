@@ -236,6 +236,7 @@ SUBCOMMANDS = {
     "调课": "adjust", "adjust": "adjust",
     "调休": "makeup", "makeup": "makeup", "补班": "makeup",
     "倒计时": "countdown", "countdown": "countdown", "考试": "countdown",
+    "放假": "holiday", "holiday": "holiday", "假期": "holiday",
 }
 
 RANK_MODES = {
@@ -250,7 +251,7 @@ RANK_MODES = {
     "schedule_lite",
     "suiren0219",
     "课表 Lite：多来源导入、群友状态、请假调课、节假日与 WebUI 控制台",
-    "v1.19.1",
+    "v26.11.11",
 )
 class ScheduleLitePlugin(Star):
     """课表 Lite：多来源导入课表、群友在上什么课、时长榜、上课提醒。
@@ -267,6 +268,7 @@ class ScheduleLitePlugin(Star):
         self._notify_task: asyncio.Task | None = None
         self._holiday_task: asyncio.Task | None = None
         self._holidays: dict[int, HolidayCalendar] = {}
+        self._custom_holiday_store: list[dict] | None = None
         self._makeup_text: str | None = None
         self._makeup_values: dict[str, int] = {}
         self._events: list[dict] = []
@@ -675,10 +677,110 @@ class ScheduleLitePlugin(Star):
         self._makeup_values = values
         return values
 
+    def _custom_holidays(self) -> list[dict]:
+        """全局自定义假期（/课表 放假 添加），懒加载 + 原子落盘。"""
+        if self._custom_holiday_store is None:
+            path = self._plugin_data_dir() / "custom_holidays.json"
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                payload = {}
+            items = payload.get("holidays") if isinstance(payload, dict) else None
+            cleaned = []
+            for item in items or []:
+                if not isinstance(item, dict):
+                    continue
+                name = str(item.get("name") or "").strip()
+                try:
+                    start = date.fromisoformat(str(item.get("start") or ""))
+                    end = date.fromisoformat(str(item.get("end") or ""))
+                except ValueError:
+                    continue
+                if name:
+                    cleaned.append({"start": start.isoformat(), "end": end.isoformat(), "name": name})
+            self._custom_holiday_store = cleaned
+        return self._custom_holiday_store
+
+    def _save_custom_holidays(self) -> None:
+        path = self._plugin_data_dir() / "custom_holidays.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        payload = {"holidays": self._custom_holiday_store or []}
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(path)
+
+    def _custom_holiday_map(self) -> dict[str, str]:
+        out: dict[str, str] = {}
+        for item in self._custom_holidays():
+            cursor = date.fromisoformat(item["start"])
+            end = date.fromisoformat(item["end"])
+            while cursor <= end:
+                out[cursor.isoformat()] = item["name"]
+                cursor += timedelta(days=1)
+        return out
+
+    def _add_custom_holiday(self, start: date, end: date, name: str) -> list[dict]:
+        """添加假期，自动替换区间重叠的旧条目；返回被替换的。"""
+        items = self._custom_holidays() or []
+        replaced = [
+            it for it in items
+            if not (date.fromisoformat(it["end"]) < start or date.fromisoformat(it["start"]) > end)
+        ]
+        self._custom_holiday_store = [
+            it for it in items if it not in replaced
+        ] + [{"start": start.isoformat(), "end": end.isoformat(), "name": name}]
+        self._save_custom_holidays()
+        return replaced
+
+    def _remove_custom_holiday(self, key: str) -> dict | None:
+        """按日期（覆盖即匹配）或名称精确删除。"""
+        items = self._custom_holidays() or []
+        target = parse_query_date(key, self._now().date())
+        for idx, item in enumerate(items):
+            start = date.fromisoformat(item["start"])
+            end = date.fromisoformat(item["end"])
+            hit = (target is not None and start <= target <= end) or item["name"] == key
+            if hit:
+                return items.pop(idx)
+        self._custom_holiday_store = items
+        return None
+
+    def _custom_holidays_text(self) -> str:
+        items = sorted(self._custom_holidays(), key=lambda it: it["start"])
+        if not items:
+            return "还没有自定义假期。添加：/课表 放假 12/30 元旦（区间用 12/30-1/1 春节）"
+        rows = [f"🏖 自定义假期（{len(items)}）"]
+        for item in items:
+            start = date.fromisoformat(item["start"])
+            end = date.fromisoformat(item["end"])
+            span = "当天" if start == end else f"{start:%m/%d} – {end:%m/%d}"
+            days = (end - start).days + 1
+            rows.append(f"· {span}「{item['name']}」" + ("" if days == 1 else f" 共 {days} 天"))
+        rows.append("取消：/课表 放假 删除 <日期或名称>")
+        return "\n".join(rows)
+
     def _calendar_for(self, day: date) -> HolidayCalendar | None:
         calendar = self._holidays.get(day.year)
         if calendar is None:
             calendar = self._load_holiday_cache(day.year)
+        # 自定义假期（/课表 放假）覆盖官方日历：学校自己的假期说了算
+        custom = self._custom_holidays()
+        if custom:
+            if calendar is None:
+                calendar = HolidayCalendar(year=day.year, days={}, source="自定义假期")
+            else:
+                calendar = HolidayCalendar(
+                    year=calendar.year,
+                    days=dict(calendar.days),
+                    source=calendar.source,
+                    updated_at=calendar.updated_at,
+                )
+            for item in custom:
+                cursor = date.fromisoformat(item["start"])
+                end = date.fromisoformat(item["end"])
+                while cursor <= end:
+                    calendar.days[cursor.isoformat()] = {"name": item["name"], "off": True}
+                    cursor += timedelta(days=1)
         if calendar and calendar.days:
             calendar.makeup_weekdays = self._makeup_map()
             return calendar
@@ -1193,6 +1295,10 @@ class ScheduleLitePlugin(Star):
 
         if sub == "help":
             async for item in self._h_help(event, tail.strip()):
+                yield item
+            return
+        if sub == "holiday":
+            async for item in self._h_holiday(event, tail.strip()):
                 yield item
             return
         if sub == "import":
@@ -3317,6 +3423,114 @@ class ScheduleLitePlugin(Star):
         if swapped:
             msg += f"\n同时把 {target_day:%m/%d} 的 {swapped} 节课换回 {source_day:%m/%d}。"
         yield event.plain_result(msg)
+
+    async def _h_holiday(self, event, args: str):
+        """自定义放假：/课表 放假 [日期|起-止] 名称；不带参数看列表；删除 <日期/名称> 取消。"""
+        args = (args or "").strip()
+        group_id = event.get_group_id() or ""
+
+        def can_manage() -> bool:
+            if not group_id:
+                return True
+            checker = getattr(event, "is_admin", None)
+            return not (callable(checker) and not checker())
+
+        if not args:
+            yield event.plain_result(self._custom_holidays_text())
+            return
+
+        tokens = [t for t in re.split(r"\s+", args) if t]
+        if tokens[0] in ("删除", "删", "取消", "del", "remove", "cancel"):
+            if not can_manage():
+                yield event.plain_result("只有管理员可以取消放假。")
+                return
+            key = " ".join(tokens[1:]).strip()
+            if not key:
+                yield event.plain_result(
+                    "用法：/课表 放假 删除 <日期或名称>，例如 /课表 放假 删除 12/30"
+                )
+                return
+            removed = self._remove_custom_holiday(key)
+            if removed:
+                yield event.plain_result(
+                    f"🏖 已取消假期「{removed['name']}」（{removed['start']} ~ {removed['end']}），"
+                    "这些日期恢复按课表上课。"
+                )
+            else:
+                yield event.plain_result(
+                    "没有找到匹配的假期。发送 /课表 放假 查看当前列表。"
+                )
+            return
+
+        # 添加：依次解析日期 token（支持单日 / 两日期 / a-b 区间），剩余为名称
+        today = self._now().date()
+        start = end = None
+        name_tokens: list[str] = []
+        index = 0
+        while index < len(tokens):
+            token = tokens[index]
+            # 区间优先：parse_date 对 “11/21-11/22” 这类串会宽松解析成 11/21
+            if re.search(r"[-~—]", token):
+                m = re.match(r"^([^~—\-]+)\s*[-~—]\s*(.+)$", token)
+                if m:
+                    left = parse_query_date(m.group(1), today)
+                    right = parse_query_date(m.group(2), today)
+                    if left and right:
+                        start, end = left, right
+                        index += 1
+                        name_tokens = tokens[index:]
+                        break
+            parsed = parse_query_date(token, today)
+            if parsed is not None:
+                if start is None:
+                    start = parsed
+                    index += 1
+                    continue
+                if end is None:
+                    end = parsed
+                    index += 1
+                    continue
+                # 三个日期以上不太合理，剩余当名称
+            name_tokens = tokens[index:]
+            break
+        if start is None:
+            yield event.plain_result(
+                "日期没看懂。用法：/课表 放假 12/30 元旦，或 /课表 放假 12/30-1/1 春节"
+            )
+            return
+        if end is None:
+            end = start
+        if end < start:
+            start, end = end, start
+        name = "".join(name_tokens).strip() or " ".join(name_tokens).strip()
+        if not name:
+            yield event.plain_result("缺少假期名称。用法：/课表 放假 12/30 元旦")
+            return
+        if len(name) > 20:
+            yield event.plain_result("假期名称太长了（20 字以内）。")
+            return
+        if (end - start).days > 60:
+            yield event.plain_result("一次最多放 60 天…超过的话请分两次添加。")
+            return
+        if not can_manage():
+            yield event.plain_result("只有管理员可以添加放假。")
+            return
+        items = self._custom_holidays()
+        if len(items) >= 50 and not any(
+            not (date.fromisoformat(it["end"]) < start or date.fromisoformat(it["start"]) > end)
+            for it in items
+        ):
+            yield event.plain_result("自定义假期太多啦（上限 50 条），先删几条再试。")
+            return
+        replaced = self._add_custom_holiday(start, end, name)
+        days = (end - start).days + 1
+        span = f"{start:%m/%d}" if start == end else f"{start:%m/%d} – {end:%m/%d}"
+        lines = [f"🏖 已放假「{name}」：{span}" + ("" if days == 1 else f"，共 {days} 天")]
+        lines.append("期间课表按无课处理，早八推送自动跳过。")
+        if replaced:
+            lines.append("♻️ 已替换重叠的：" + "、".join(f"「{it['name']}」" for it in replaced))
+        lines.append(f"取消：/课表 放假 删除 {start:%m/%d}")
+        yield event.plain_result("\n".join(lines))
 
     async def _h_makeup(self, event, args: str):
         tt = self._own_tt(event)

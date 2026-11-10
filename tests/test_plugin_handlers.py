@@ -2531,6 +2531,126 @@ def test_teacher_always_dropped_location_kept(plugin):
     assert plugin._show_location() is False
 
 
+class _AdminEvent(_Event):
+    """带 is_admin 的桩，验证群聊放假管理权限。"""
+
+    def __init__(self, *args, admin=True, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._admin = admin
+
+    def is_admin(self):
+        return self._admin
+
+
+def test_custom_holiday_add_list_delete(plugin, tmp_path):
+    """/课表 放假 添加/列表/删除，日历与状态随之生效。"""
+    from datetime import timedelta
+
+    today = plugin._now().date()
+    start = today + timedelta(days=10)
+    end = start + timedelta(days=1)
+    start_s, end_s = f"{start.month}/{start.day}", f"{end.month}/{end.day}"
+
+    event = _AdminEvent(f"/课表 放假 {start_s}-{end_s} 校庆", group="g1")
+    outs = asyncio.run(_collect(plugin._h_holiday(event, f"{start_s}-{end_s} 校庆")))
+    assert "已放假" in outs[0] and "校庆" in outs[0]
+
+    # 日历生效：区间内 is_off，名称正确
+    calendar = plugin._calendar_for(start)
+    assert calendar is not None and calendar.is_off(start) and calendar.label(start) == "校庆"
+    assert calendar.is_off(end)
+
+    # 列表
+    event = _Event("/课表 放假", group="g1")
+    outs = asyncio.run(_collect(plugin._h_holiday(event, "")))
+    assert "校庆" in outs[0] and "删除" in outs[0]
+
+    # 按日期删除
+    event = _AdminEvent(f"/课表 放假 删除 {start_s}", group="g1")
+    outs = asyncio.run(_collect(plugin._h_holiday(event, f"删除 {start_s}")))
+    assert "已取消" in outs[0]
+    calendar = plugin._calendar_for(start)
+    assert calendar is None or not calendar.is_off(start)
+
+
+def test_custom_holiday_overrides_official(plugin, tmp_path):
+    """自定义假期覆盖官方日历（含补班日），删除后恢复。"""
+    import json as jsonlib
+
+    from datetime import timedelta
+
+    from schedule_lite_core.holiday import HolidayCalendar
+
+    today = plugin._now().date()
+    target = today + timedelta(days=20)
+    year_cache = plugin._plugin_data_dir() / "holidays" / f"{target.year}.json"
+    year_cache.parent.mkdir(parents=True, exist_ok=True)
+    calendar = HolidayCalendar(year=target.year, days={}, source="测试")
+    calendar.days[target.isoformat()] = {"name": "调休补班", "off": False}
+    calendar.updated_at = plugin._now().isoformat()
+    calendar.save(year_cache)
+    plugin._holidays.clear()
+
+    assert plugin._calendar_for(target).is_workday(target)
+
+    s = f"{target.month}/{target.day}"
+    event = _AdminEvent(f"/课表 放假 {s} 运动会", group="g1")
+    asyncio.run(_collect(plugin._h_holiday(event, f"{s} 运动会")))
+    assert plugin._calendar_for(target).is_off(target)
+    assert plugin._calendar_for(target).label(target) == "运动会"
+
+    event = _AdminEvent(f"/课表 放假 删除 {s}", group="g1")
+    asyncio.run(_collect(plugin._h_holiday(event, f"删除 {s}")))
+    assert plugin._calendar_for(target).is_workday(target)
+
+
+def test_custom_holiday_group_requires_admin(plugin, tmp_path):
+    """群聊里非管理员不能添加/取消，列表不受限；私聊放行。"""
+    from datetime import timedelta
+
+    start = plugin._now().date() + timedelta(days=8)
+    s = f"{start.month}/{start.day}"
+
+    event = _AdminEvent(f"/课表 放假 {s} 运动会", group="g1", admin=False)
+    outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s} 运动会")))
+    assert "管理员" in outs[0]
+    assert plugin._custom_holidays() == []
+
+    # 私聊非管理员也放行（自己服务器自己管）
+    event = _AdminEvent(f"/课表 放假 {s} 运动会", admin=False)
+    outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s} 运动会")))
+    assert "已放假" in outs[0]
+
+    event = _Event("/课表 放假")
+    outs = asyncio.run(_collect(plugin._h_holiday(event, "")))
+    assert "运动会" in outs[0]
+
+
+def test_custom_holiday_validation(plugin, tmp_path):
+    """缺名称 / 坏日期 / 跨度上限。"""
+    from datetime import timedelta
+
+    start = plugin._now().date() + timedelta(days=5)
+    s = f"{start.month}/{start.day}"
+    event = _Event(f"/课表 放假 {s}")
+    outs = asyncio.run(_collect(plugin._h_holiday(event, s)))
+    assert "缺少假期名称" in outs[0]
+
+    event = _Event("/课表 放假 快放假了")
+    outs = asyncio.run(_collect(plugin._h_holiday(event, "快放假了")))
+    assert "日期没看懂" in outs[0]
+
+    event = _Event(f"/课表 放假 {s}-{s} " + "超长" * 15)
+    outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s}-{s} " + "超长" * 15)))
+    assert "太长" in outs[0]
+
+    # 单日添加：start==end
+    event = _Event(f"/课表 放假 {s} 单日假")
+    outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s} 单日假")))
+    assert "已放假" in outs[0]
+    assert plugin._custom_holidays()[0]["start"] == plugin._custom_holidays()[0]["end"]
+
+
 def test_ics_without_term_start_asks_for_it(plugin):
     ics = """BEGIN:VCALENDAR
 BEGIN:VEVENT
