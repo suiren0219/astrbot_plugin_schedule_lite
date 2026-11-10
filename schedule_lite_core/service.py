@@ -183,9 +183,15 @@ def day_entries(
     d: date,
     holiday=None,
 ) -> list[DayItem]:
-    """当天课程：应用法定节假日、调休补班、请假外的调课记录。"""
+    """当天课程：应用法定节假日、调休补班、请假外的调课记录。
+
+    自己的自定义放假（/课表 放假）只对自己生效：命中区间直接按无课处理，
+    优先级高于法定节假日与调休补班。
+    """
     week, state = week_state(tt, d)
     if state != "during":
+        return []
+    if tt.holiday_on(d):
         return []
 
     weekday = d.weekday() + 1

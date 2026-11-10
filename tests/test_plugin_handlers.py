@@ -2531,104 +2531,90 @@ def test_teacher_always_dropped_location_kept(plugin):
     assert plugin._show_location() is False
 
 
-class _AdminEvent(_Event):
-    """带 is_admin 的桩，验证群聊放假管理权限。"""
-
-    def __init__(self, *args, admin=True, **kwargs):
-        super().__init__(*args, **kwargs)
-        self._admin = admin
-
-    def is_admin(self):
-        return self._admin
-
-
 def test_custom_holiday_add_list_delete(plugin, tmp_path):
-    """/课表 放假 添加/列表/删除，日历与状态随之生效。"""
+    """/课表 放假 添加/列表/删除，只影响自己的课表。"""
     from datetime import timedelta
 
+    from schedule_lite_core.model import Course, Timetable
+    from schedule_lite_core.service import day_entries
+
+    # 固定课表：目标日期当天有课，删除后能断言恢复
     today = plugin._now().date()
     start = today + timedelta(days=10)
     end = start + timedelta(days=1)
     start_s, end_s = f"{start.month}/{start.day}", f"{end.month}/{end.day}"
+    tt = Timetable(
+        owner_id="10001", owner_name="张三",
+        term_start="2026-08-31", total_weeks=20,
+        courses=[
+            Course(name="课", day=start.isoweekday(), weeks=list(range(1, 21)), start="08:00", end="09:40"),
+            Course(name="课", day=end.isoweekday(), weeks=list(range(1, 21)), start="08:00", end="09:40"),
+        ],
+    )
+    plugin.store.put("test:10001", tt)
 
-    event = _AdminEvent(f"/课表 放假 {start_s}-{end_s} 校庆", group="g1")
+    event = _Event(f"/课表 放假 {start_s}-{end_s} 校庆")
     outs = asyncio.run(_collect(plugin._h_holiday(event, f"{start_s}-{end_s} 校庆")))
     assert "已放假" in outs[0] and "校庆" in outs[0]
-
-    # 日历生效：区间内 is_off，名称正确
-    calendar = plugin._calendar_for(start)
-    assert calendar is not None and calendar.is_off(start) and calendar.label(start) == "校庆"
-    assert calendar.is_off(end)
+    assert tt.holiday_on(start) and tt.holiday_on(end)
+    # 自己当天无课；官方日历不被污染
+    assert day_entries(tt, start, plugin._calendar_for(start)) == []
+    official = plugin._calendar_for(start)
+    if official is not None:
+        assert not official.is_off(start) or official.source == "自定义假期"
 
     # 列表
-    event = _Event("/课表 放假", group="g1")
+    event = _Event("/课表 放假")
     outs = asyncio.run(_collect(plugin._h_holiday(event, "")))
     assert "校庆" in outs[0] and "删除" in outs[0]
 
-    # 按日期删除
-    event = _AdminEvent(f"/课表 放假 删除 {start_s}", group="g1")
+    # 按日期删除后恢复
+    event = _Event(f"/课表 放假 删除 {start_s}")
     outs = asyncio.run(_collect(plugin._h_holiday(event, f"删除 {start_s}")))
     assert "已取消" in outs[0]
-    calendar = plugin._calendar_for(start)
-    assert calendar is None or not calendar.is_off(start)
+    assert not tt.holiday_on(start)
+    assert day_entries(tt, start, plugin._calendar_for(start))
 
 
-def test_custom_holiday_overrides_official(plugin, tmp_path):
-    """自定义假期覆盖官方日历（含补班日），删除后恢复。"""
-    import json as jsonlib
-
+def test_custom_holiday_only_affects_owner(plugin, tmp_path):
+    """A 放假只让 A 的课表变空，B 的课表照常。"""
     from datetime import timedelta
 
-    from schedule_lite_core.holiday import HolidayCalendar
+    from schedule_lite_core.model import Course, Timetable
+    from schedule_lite_core.service import day_entries
 
     today = plugin._now().date()
-    target = today + timedelta(days=20)
-    year_cache = plugin._plugin_data_dir() / "holidays" / f"{target.year}.json"
-    year_cache.parent.mkdir(parents=True, exist_ok=True)
-    calendar = HolidayCalendar(year=target.year, days={}, source="测试")
-    calendar.days[target.isoformat()] = {"name": "调休补班", "off": False}
-    calendar.updated_at = plugin._now().isoformat()
-    calendar.save(year_cache)
-    plugin._holidays.clear()
+    monday = today - timedelta(days=today.isoweekday() - 1)
+    target = today + timedelta(days=3)
+    weeks = list(range(1, 21))
 
-    assert plugin._calendar_for(target).is_workday(target)
+    def make(uid):
+        return Timetable(
+            owner_id=uid, owner_name=uid,
+            term_start=monday.isoformat(), total_weeks=20,
+            courses=[Course(name="课", day=target.isoweekday(), weeks=weeks, start="08:00", end="09:40")],
+        )
+
+    a = make("a")
+    b = make("b")
+    plugin.store.put("test:a", a)
+    plugin.store.put("test:b", b)
+    assert day_entries(a, target, None) and day_entries(b, target, None)
 
     s = f"{target.month}/{target.day}"
-    event = _AdminEvent(f"/课表 放假 {s} 运动会", group="g1")
-    asyncio.run(_collect(plugin._h_holiday(event, f"{s} 运动会")))
-    assert plugin._calendar_for(target).is_off(target)
-    assert plugin._calendar_for(target).label(target) == "运动会"
-
-    event = _AdminEvent(f"/课表 放假 删除 {s}", group="g1")
-    asyncio.run(_collect(plugin._h_holiday(event, f"删除 {s}")))
-    assert plugin._calendar_for(target).is_workday(target)
-
-
-def test_custom_holiday_group_requires_admin(plugin, tmp_path):
-    """群聊里非管理员不能添加/取消，列表不受限；私聊放行。"""
-    from datetime import timedelta
-
-    start = plugin._now().date() + timedelta(days=8)
-    s = f"{start.month}/{start.day}"
-
-    event = _AdminEvent(f"/课表 放假 {s} 运动会", group="g1", admin=False)
-    outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s} 运动会")))
-    assert "管理员" in outs[0]
-    assert plugin._custom_holidays() == []
-
-    # 私聊非管理员也放行（自己服务器自己管）
-    event = _AdminEvent(f"/课表 放假 {s} 运动会", admin=False)
+    event = _Event(f"/课表 放假 {s} 运动会", uid="a", nick="a")
     outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s} 运动会")))
     assert "已放假" in outs[0]
-
-    event = _Event("/课表 放假")
-    outs = asyncio.run(_collect(plugin._h_holiday(event, "")))
-    assert "运动会" in outs[0]
+    assert day_entries(a, target, None) == [], "A 自己按无课处理"
+    assert day_entries(b, target, None), "B 不受影响"
 
 
 def test_custom_holiday_validation(plugin, tmp_path):
-    """缺名称 / 坏日期 / 跨度上限。"""
+    """缺名称 / 坏日期 / 名称过长 / 单日添加。"""
     from datetime import timedelta
+
+    event = _Event("/课表 导入")
+    asyncio.run(_collect(plugin._h_import(event, json.dumps(SHIGUANG_SAMPLE, ensure_ascii=False))))
 
     start = plugin._now().date() + timedelta(days=5)
     s = f"{start.month}/{start.day}"
@@ -2644,11 +2630,33 @@ def test_custom_holiday_validation(plugin, tmp_path):
     outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s}-{s} " + "超长" * 15)))
     assert "太长" in outs[0]
 
-    # 单日添加：start==end
     event = _Event(f"/课表 放假 {s} 单日假")
     outs = asyncio.run(_collect(plugin._h_holiday(event, f"{s} 单日假")))
     assert "已放假" in outs[0]
-    assert plugin._custom_holidays()[0]["start"] == plugin._custom_holidays()[0]["end"]
+    tt = plugin.store.get(plugin._user_key(event))
+    assert tt.holidays[0]["start"] == tt.holidays[0]["end"]
+
+
+def test_custom_holiday_survives_reload(plugin, tmp_path):
+    """假期写进课表 JSON，重载后仍在。"""
+    from datetime import timedelta
+
+    from schedule_lite_core.model import Course, Timetable
+
+    tt = Timetable(
+        owner_id="10001", owner_name="张三",
+        term_start="2026-08-31", total_weeks=20,
+        courses=[Course(name="课", day=1, weeks=list(range(1, 21)), start="08:00", end="09:40")],
+    )
+    plugin.store.put("test:10001", tt)
+    start = plugin._now().date() + timedelta(days=4)
+    s = f"{start.month}/{start.day}"
+    event = _Event(f"/课表 放假 {s} 事假")
+    asyncio.run(_collect(plugin._h_holiday(event, f"{s} 事假")))
+    data = tt.to_dict()
+    assert data["holidays"] and data["holidays"][0]["name"] == "事假"
+    restored = Timetable.from_dict(data)
+    assert restored.holiday_on(start)
 
 
 def test_ics_without_term_start_asks_for_it(plugin):
