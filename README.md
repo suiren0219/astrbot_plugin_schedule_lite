@@ -376,4 +376,6 @@ GitHub Actions 会在 Python 3.10 / 3.12 上自动跑同一套测试。
 
 ## 许可
 
-MIT License，见 [LICENSE](LICENSE)。
+[GNU Affero General Public License v3.0](LICENSE)（AGPL-3.0）。
+
+允许自由使用、学习、修改及商业分发；若分发修改版，或以网络服务形式向他人提供本插件或修改版，须同样以 AGPL-3.0 公开完整对应源代码。协议全文见 [LICENSE](LICENSE)。
