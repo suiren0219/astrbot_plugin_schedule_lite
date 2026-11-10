@@ -110,6 +110,8 @@ class Timetable:
     group_origins: dict[str, str] = field(default_factory=dict)
     # 请假记录：[{"start": "2026-09-10", "end": "2026-09-12", "reason": "病假"}]
     leaves: list[dict[str, Any]] = field(default_factory=list)
+    # 自定义放假（只对自己生效）：[{"start": "2026-12-30", "end": "12-31", "name": "元旦"}]
+    holidays: list[dict[str, Any]] = field(default_factory=list)
     # 调课记录：from_date 当天的课程快照移到 to_date
     adjustments: list[dict[str, Any]] = field(default_factory=list)
     # 调休补班：{"2026-09-27": 1} 表示按周一课表上课
@@ -163,6 +165,15 @@ class Timetable:
                     "reason": str(item.get("reason") or ""),
                 }
                 for item in (data.get("leaves") or [])
+                if isinstance(item, dict) and item.get("start")
+            ],
+            holidays=[
+                {
+                    "start": str(item.get("start") or ""),
+                    "end": str(item.get("end") or item.get("start") or ""),
+                    "name": str(item.get("name") or ""),
+                }
+                for item in (data.get("holidays") or [])
                 if isinstance(item, dict) and item.get("start")
             ],
             adjustments=[
@@ -228,6 +239,16 @@ class Timetable:
     def leave_on(self, day: date) -> dict[str, Any] | None:
         key = day.isoformat()
         for item in self.leaves:
+            start = str(item.get("start") or "")
+            end = str(item.get("end") or start)
+            if start and start <= key <= end:
+                return item
+        return None
+
+    def holiday_on(self, day: date) -> dict[str, Any] | None:
+        """当天是否处于自己的自定义放假区间内。"""
+        key = day.isoformat()
+        for item in self.holidays:
             start = str(item.get("start") or "")
             end = str(item.get("end") or start)
             if start and start <= key <= end:
