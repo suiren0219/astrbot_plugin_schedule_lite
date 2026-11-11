@@ -740,8 +740,9 @@ def test_help_index_lists_categories(plugin):
     event = _Event()
     out = asyncio.run(_collect(plugin._h_help(event, "")))
     assert out == [plugin_main.HELP_INDEX_TEXT]
-    for title in ("导入", "查询", "请假", "状态", "设置", "面板", "常见", "全部"):
+    for title in ("导入", "查询", "请假", "放假", "状态", "设置", "面板", "常见", "全部"):
         assert title in out[0]
+    assert "/课表 帮助 放假" in out[0]
     assert plugin_main.ISSUE_URL in out[0]
     assert "/issues" in out[0]
 
@@ -801,6 +802,29 @@ def test_web_companion_help_link(plugin, tmp_path):
     event = _Event()
     out = asyncio.run(_collect(plugin._h_help(event, "")))
     assert out == [plugin_main.HELP_INDEX_TEXT]
+
+
+def test_help_holiday_category(plugin, tmp_path):
+    """放假分类能抽出「自定义放假」章节，网页伴侣链接能定位到它。"""
+    import json as jsonlib
+    import time as time_mod
+
+    import main as plugin_main
+
+    markdown = plugin._help_markdown("放假")
+    assert "自定义放假" in markdown
+    assert "/课表 放假 12/30" in markdown
+    assert "只对自己生效" in markdown
+    assert "群友不受影响" in markdown
+
+    # 网页伴侣：分类要映射到 /help/N（help.md 里第 N 个 ##）
+    marker = plugin._plugin_data_dir() / "web_companion.json"
+    marker.write_text(
+        jsonlib.dumps({"base_url": "https://kb.example.com/schedule", "updated_at": time_mod.time()}),
+        encoding="utf-8",
+    )
+    url = plugin._web_companion_help_url(plugin_main.HELP_CATEGORIES["放假"]["headings"][0])
+    assert "/help/" in url and url != "https://kb.example.com/schedule/help"
 
 
 def test_help_category_markdown_is_extracted(plugin):
