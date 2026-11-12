@@ -100,7 +100,14 @@ def available(font_path: str = "") -> bool:
 def _font(path: str, size: int):
     key = (path, size)
     if key not in _font_cache:
-        _font_cache[key] = ImageFont.truetype(path, size, index=0)
+        # 没有任何系统中文字体时仍要能画出头像首字，退回 PIL 内置字体
+        if path:
+            _font_cache[key] = ImageFont.truetype(path, size, index=0)
+        else:
+            try:
+                _font_cache[key] = ImageFont.load_default(size=max(1, size))
+            except TypeError:  # Pillow < 10 的 load_default 不接受 size
+                _font_cache[key] = ImageFont.load_default()
     return _font_cache[key]
 
 
@@ -810,7 +817,8 @@ def _draw_avatar(
         fill=_avatar_color(name),
     )
     initial = (name or "?")[:1]
-    initial_font = _font(_font_pair("")[1], _s(radius * 0.9))
+    regular_font, bold_font = _font_pair("")
+    initial_font = _font(bold_font or regular_font, _s(radius * 0.9))
     draw.text(
         (cx - initial_font.getlength(initial) / 2, cy - _s(radius * 0.55)),
         initial,

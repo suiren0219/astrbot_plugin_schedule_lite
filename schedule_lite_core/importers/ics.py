@@ -267,12 +267,24 @@ def _parse_dt(
     utc = value.endswith("Z")
     if utc:
         value = value[:-1]
+    # RFC 5545 允许数字 UTC 偏移（DTSTART:20260907T080000+08:00）；先把偏移
+    # 摘出来，否则后面的 strptime 会把 +0800 当成时间的一部分而整条事件解析失败。
+    offset_match = re.search(r"([+-])(\d{2}):?(\d{2})$", value)
+    numeric_offset = None
+    if offset_match and "T" in value:
+        hours, minutes = int(offset_match.group(2)), int(offset_match.group(3))
+        numeric_offset = timedelta(hours=hours, minutes=minutes)
+        if offset_match.group(1) == "-":
+            numeric_offset = -numeric_offset
+        value = value[: offset_match.start()]
     if "." in value:
         value = value.split(".", 1)[0]
     value = value.replace("-", "").replace(":", "")
     tzid = params.get("TZID")
     if utc:
         tz = timezone.utc
+    elif numeric_offset is not None:
+        tz = timezone(numeric_offset)
     elif tzid:
         tz = _tz_for(tzid, default_tz)
     else:

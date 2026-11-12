@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import json
+import math
 import re
 from datetime import date, datetime, timedelta, timezone
 from typing import Any, Iterable
@@ -97,6 +98,8 @@ def parse_day(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            return None
         n = int(value)
         if 1 <= n <= 7:
             return n
@@ -106,9 +109,11 @@ def parse_day(value: Any) -> int | None:
     text = str(value).strip()
     if not text:
         return None
-    if text.isdigit():
-        return parse_day(int(text))
     key = text.replace(" ", "")
+    if not key.isascii():
+        key = key.translate(_FW_TRANS)
+    if key.isascii() and key.isdigit():
+        return parse_day(int(key))
     if key in _DAY_WORDS:
         return _DAY_WORDS[key]
     upper = key.upper()
@@ -150,7 +155,9 @@ def _expand_token(core: str) -> list[int]:
             a, b = b, a
         if step <= 0:
             step = 1
-        return list(range(a, b + 1, step))
+        # 周次最终只会保留 1..60，必须在这里就截断：用户给的 JSON/CSV 里
+        # 出现 "1-99999999" 时，不过滤会先构造上亿个整数，卡死整个事件循环。
+        return list(range(a, min(b, 60) + 1, step))
     # 剩余情况：把这段里的数字都当单周处理（如 “1-4-7” 这种脏数据）
     return [int(x) for x in re.findall(r"\d+", core)]
 
@@ -167,6 +174,8 @@ def parse_weeks(value: Any, total_weeks: int | None = None) -> list[int]:
     if value is None or isinstance(value, bool):
         return []
     if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            return []
         n = int(value)
         if 1 <= n <= 60:
             return [n]
@@ -174,7 +183,7 @@ def parse_weeks(value: Any, total_weeks: int | None = None) -> list[int]:
     if isinstance(value, (list, tuple, set)):
         out: set[int] = set()
         for item in value:
-            if isinstance(item, str) and re.search(r"[-~—至,，、\s/]", item):
+            if isinstance(item, str) and re.search(r"[-~—－至,，、\s/]", item):
                 out.update(parse_weeks(item, None))
             else:
                 try:
@@ -254,6 +263,8 @@ def parse_time(value: Any) -> str | None:
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, (int, float)):
+        if not math.isfinite(value):
+            return None
         n = int(value)
         if 0 <= n <= 2359 and 0 <= n % 100 < 60:
             return f"{n // 100:02d}:{n % 100:02d}"
@@ -261,6 +272,8 @@ def parse_time(value: Any) -> str | None:
     text = str(value).strip()
     if not text:
         return None
+    if not text.isascii():
+        text = text.translate(_FW_TRANS)
     text = (
         text.replace("：", ":")
         .replace("．", ":")
@@ -276,10 +289,10 @@ def parse_time(value: Any) -> str | None:
         m = re.fullmatch(r"(\d{3,4})", text)
         if m and 0 <= int(text[:-2]) <= 23 and 0 <= int(text[-2:]) <= 59:
             hour, minute = int(text[:-2]), int(text[-2:])
-        elif text.isdigit() and 0 <= int(text) <= 1439:
+        elif text.isascii() and text.isdigit() and int(text) <= 1439:
             # 有些导出把时间写成“距 0 点的分钟数”，如 480 = 08:00
             hour, minute = divmod(int(text), 60)
-        elif re.fullmatch(r"\d{1,2}", text):
+        elif text.isascii() and re.fullmatch(r"\d{1,2}", text):
             hour, minute = int(text), 0
         else:
             return None
@@ -420,8 +433,13 @@ def default_sections() -> list[Section]:
 # ---------------------------------------------------------------- 日期 / 学期
 
 
-def parse_date(value: Any) -> date | None:
-    """解析日期/时间戳，兼容 2026-09-01、2026/9/1、20260901、2026年9月1日、毫秒时间戳。"""
+def parse_date(value: Any, *, today: date | None = None) -> date | None:
+    """解析日期/时间戳，兼容 2026-09-01、2026/9/1、20260901、2026年9月1日、毫秒时间戳。
+
+    「12/30」这类不带年份的写法以 ``today`` 为基准就近推断：跨年区间
+    （如 12/30-1/1）的右端点会落到明年，而不是今年 1 月已过去的那天。
+    导入数据里的开学日期仍按自然年解析，调用方不传 ``today`` 即可。
+    """
     if value is None or isinstance(value, bool):
         return None
     if isinstance(value, datetime):
@@ -430,6 +448,8 @@ def parse_date(value: Any) -> date | None:
         return value
     if isinstance(value, (int, float)):
         n = float(value)
+        if not math.isfinite(n):
+            return None
         if n > 1e11:  # 毫秒
             n /= 1000.0
         try:
@@ -442,7 +462,7 @@ def parse_date(value: Any) -> date | None:
         return None
     if text.isdigit() and len(text) >= 10:
         # 字符串形式的 Unix 时间戳
-        return parse_date(int(text))
+        return parse_date(int(text), today=today)
     text = text.replace("：", ":")
     m = re.match(r"^(\d{4})\s*[-/年.]\s*(\d{1,2})\s*[-/月.]\s*(\d{1,2})", text)
     if m:
@@ -452,10 +472,17 @@ def parse_date(value: Any) -> date | None:
             return None
     m = re.match(r"^(\d{1,2})\s*[-/月.]\s*(\d{1,2})\s*日?", text)
     if m:
+        year = (today or date.today()).year
         try:
-            return date(date.today().year, int(m.group(1)), int(m.group(2)))
+            parsed = date(year, int(m.group(1)), int(m.group(2)))
         except ValueError:
             return None
+        if today is not None and (parsed - today).days < -180:
+            try:
+                parsed = parsed.replace(year=year + 1)
+            except ValueError:
+                pass
+        return parsed
     m = re.fullmatch(r"(\d{4})(\d{2})(\d{2})", text)
     if m:
         try:
