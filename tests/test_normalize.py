@@ -124,3 +124,35 @@ def test_parse_section_times_python_repr():
         (1, "08:00", "08:45"),
         (2, "08:55", "09:40"),
     ]
+
+
+# ---------------------------------------------------------------- 回归：坏数据 / 跨年日期
+
+
+def test_parse_weeks_unbounded_range_is_clamped():
+    """超大周次区间不能先构造上亿个整数（会卡死事件循环 / OOM）。"""
+    import time
+
+    start = time.monotonic()
+    assert parse_weeks("1-99999999") == list(range(1, 61))
+    assert time.monotonic() - start < 1
+    assert parse_weeks(["1－16周"]) == list(range(1, 17))
+
+
+def test_numeric_parsers_reject_nan_inf_and_unicode_digits():
+    assert parse_weeks(float("nan")) == []
+    assert parse_day(float("inf")) is None
+    assert parse_time(float("nan")) is None
+    assert parse_day("²") is None
+    assert parse_time("²") is None
+    assert parse_date(float("nan")) is None
+
+
+def test_parse_date_partial_uses_today_for_year_inference():
+    """跨年区间 12/30-1/1 的右端点应落到明年，而不是今年已过去的 1 月。"""
+    today = date(2026, 11, 30)
+    assert parse_date("12/30", today=today) == date(2026, 12, 30)
+    assert parse_date("1/1", today=today) == date(2027, 1, 1)
+    assert parse_date("1/1", today=date(2026, 1, 15)) == date(2026, 1, 1)
+    # 导入数据里的开学日期不带 today，仍按自然年解析
+    assert parse_date("9/1").month == 9

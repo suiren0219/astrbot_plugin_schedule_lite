@@ -34,6 +34,7 @@ import re
 import socket
 import sys
 import time
+from collections.abc import Sequence
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -136,8 +137,25 @@ def _safe_int(value, default: int = 0) -> int:
         if value is None or isinstance(value, bool):
             return default
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
+
+
+def _holiday_dates(item: dict) -> tuple[date, date] | None:
+    """宽容解析自定义放假区间；旧数据里「12-31」这种短日期按 start 的年份补齐。"""
+    try:
+        start = date.fromisoformat(str(item.get("start") or ""))
+    except (ValueError, TypeError, AttributeError):
+        return None
+    raw_end = str(item.get("end") or item.get("start") or "")
+    try:
+        end = date.fromisoformat(raw_end)
+    except ValueError:
+        try:
+            end = date.fromisoformat(f"{start.year}-{raw_end}")
+        except (ValueError, TypeError):
+            return None
+    return (start, end) if end >= start else None
 
 
 GITHUB_URL = "https://github.com/suiren0219/astrbot_plugin_schedule_lite"
@@ -756,7 +774,10 @@ class ScheduleLitePlugin(Star):
                     clean = {}
                     for gid, item in bucket.items():
                         if isinstance(item, (list, tuple)) and len(item) == 2:
-                            clean[str(gid)] = (str(item[0]), int(item[1]))
+                            clean[str(gid)] = (
+                                str(item[0]),
+                                _safe_int(item[1], 0),
+                            )
                     if clean:
                         self._broadcast_failures[str(kind)] = clean
 
@@ -975,7 +996,7 @@ class ScheduleLitePlugin(Star):
             raw = getattr(sender, "user_id", "")
             if raw not in (None, ""):
                 uid = str(raw)
-        return uid or event.get_session_id()
+        return str(uid)
 
     @staticmethod
     def _sender_name(event) -> str:
@@ -1315,10 +1336,11 @@ class ScheduleLitePlugin(Star):
             if not tt:
                 yield event.plain_result("对方还没有导入课表哦。")
                 return
+            # 私聊同样要挡住跨群查询：group_id 为空时不能让判断整体短路，
+            # 否则任何人私聊 /课表 <QQ号> 就能绕过「默认禁止跨群」的隐私设置。
             if (
-                group_id
-                and not self._cfg("allow_cross_group", False)
-                and group_id not in tt.groups
+                not self._cfg("allow_cross_group", False)
+                and (not group_id or group_id not in tt.groups)
             ):
                 yield event.plain_result("对方还没有在本群使用过课表，为保护隐私不能跨群查询。")
                 return
@@ -1862,6 +1884,36 @@ class ScheduleLitePlugin(Star):
                 parts.append(await self._file_component_text(comp))
         return "\n".join(p for p in parts if p.strip())
 
+    @staticmethod
+    def _platform_file_path(path: str) -> Path | None:
+        """引用消息里的本地路径只允许落在平台缓存 / 本插件数据目录内。
+
+        CQ 字符串里的 file/path 可能由发送方伪造，若直接读取就等于任意本地文件读。
+        """
+        try:
+            resolved = Path(path).resolve()
+        except (OSError, ValueError):
+            return None
+        if not resolved.is_file():
+            return None
+        try:
+            roots = [Path(StarTools.get_data_dir()).resolve()]
+        except Exception:  # noqa: BLE001 - StarTools 不可用时仍可放行系统临时目录
+            roots = []
+        for env_name in ("TEMP", "TMP", "TMPDIR"):
+            value = os.environ.get(env_name)
+            if value:
+                roots.append(Path(value).resolve())
+        cq_cache = Path.home() / ".cache" / "go-cqhttp" / "data"
+        roots.append(cq_cache.resolve())
+        for root in roots:
+            try:
+                resolved.relative_to(root)
+                return resolved
+            except ValueError:
+                continue
+        return None
+
     async def _platform_quoted_text(self, event, reply_comp) -> str:
         """回复链为空时，用平台 get_msg 接口取被引用消息的内容。"""
         msg_id = str(getattr(reply_comp, "id", "") or "").strip()
@@ -1905,10 +1957,11 @@ class ScheduleLitePlugin(Star):
                 path = str(seg_data.get("path") or seg_data.get("file") or "")
                 if url.startswith(("http://", "https://")):
                     parts.append(url)
-                elif path and os.path.exists(path):
-                    if os.path.getsize(path) > limit:
+                elif path and self._platform_file_path(path) is not None:
+                    real_path = self._platform_file_path(path)
+                    if real_path.stat().st_size > limit:
                         raise ImportFailure(f"引用的文件太大，上限是 {limit // 1024} KB")
-                    text = self._decode_bytes(Path(path).read_bytes())
+                    text = self._decode_bytes(real_path.read_bytes())
                     if text is None:
                         raise ImportFailure("引用的文件编码无法识别")
                     parts.append(text)
@@ -3094,10 +3147,8 @@ class ScheduleLitePlugin(Star):
             return None
         m = re.fullmatch(r"(\d{1,2})[./](\d{1,2})", token)
         if m:
-            try:
-                return date(today.year, int(m.group(1)), int(m.group(2)))
-            except ValueError:
-                return None
+            # 交给 parse_date 按今天就近推断年份：12/30-1/1 的右端点应落到明年
+            return parse_date(f"{m.group(1)}/{m.group(2)}", today=today)
         return parse_query_date(token, today)
 
     def _take_dates(
@@ -3331,39 +3382,48 @@ class ScheduleLitePlugin(Star):
 
     @staticmethod
     def _holidays_text(tt: Timetable) -> str:
-        items = sorted(tt.holidays, key=lambda it: it["start"])
-        if not items:
-            return "你还没有自定义放假。添加：/课表 放假 12/30 元旦（区间用 12/30-1/1 春节）"
-        rows = [f"🏖 我的自定义放假（{len(items)}）"]
-        for item in items:
-            start = date.fromisoformat(item["start"])
-            end = date.fromisoformat(item["end"])
+        rows = []
+        for item in tt.holidays:
+            parsed = _holiday_dates(item)
+            if parsed is None:
+                continue
+            start, end = parsed
             span = "当天" if start == end else f"{start:%m/%d} – {end:%m/%d}"
             days = (end - start).days + 1
-            rows.append(f"· {span}「{item['name']}」" + ("" if days == 1 else f" 共 {days} 天"))
-        rows.append("取消：/课表 放假 删除 <日期或名称>")
-        return "\n".join(rows)
+            rows.append(
+                (start, f"· {span}「{item.get('name') or ''}」" + ("" if days == 1 else f" 共 {days} 天"))
+            )
+        if not rows:
+            return "你还没有自定义放假。添加：/课表 放假 12/30 元旦（区间用 12/30-1/1 春节）"
+        lines = [f"🏖 我的自定义放假（{len(rows)}）"]
+        lines.extend(text for _start, text in sorted(rows, key=lambda row: row[0]))
+        lines.append("取消：/课表 放假 删除 <日期或名称>")
+        return "\n".join(lines)
 
     @staticmethod
     def _add_tt_holiday(tt: Timetable, start: date, end: date, name: str) -> list[dict]:
         """添加到自己的课表，自动替换区间重叠的旧条目；返回被替换的。"""
-        replaced = [
-            it for it in tt.holidays
-            if not (date.fromisoformat(it["end"]) < start or date.fromisoformat(it["start"]) > end)
+        kept, replaced = [], []
+        for item in tt.holidays:
+            parsed = _holiday_dates(item)
+            if parsed and not (parsed[1] < start or parsed[0] > end):
+                replaced.append(item)
+            else:
+                kept.append(item)
+        tt.holidays = kept + [
+            {"start": start.isoformat(), "end": end.isoformat(), "name": name}
         ]
-        tt.holidays = [
-            it for it in tt.holidays if it not in replaced
-        ] + [{"start": start.isoformat(), "end": end.isoformat(), "name": name}]
         return replaced
 
     @staticmethod
-    def _remove_tt_holiday(tt: Timetable, key: str) -> dict | None:
+    def _remove_tt_holiday(tt: Timetable, key: str, today: date) -> dict | None:
         """按日期（覆盖即匹配）或名称精确删除。"""
-        target = parse_query_date(key, date.today())
+        target = parse_query_date(key, today)
         for idx, item in enumerate(tt.holidays):
-            start = date.fromisoformat(item["start"])
-            end = date.fromisoformat(item["end"])
-            hit = (target is not None and start <= target <= end) or item["name"] == key
+            parsed = _holiday_dates(item)
+            hit = (parsed and target is not None and parsed[0] <= target <= parsed[1]) or (
+                item.get("name") == key
+            )
             if hit:
                 return tt.holidays.pop(idx)
         return None
@@ -3390,9 +3450,10 @@ class ScheduleLitePlugin(Star):
                     "用法：/课表 放假 删除 <日期或名称>，例如 /课表 放假 删除 12/30"
                 )
                 return
-            removed = self._remove_tt_holiday(tt, key)
+            removed = self._remove_tt_holiday(tt, key, self._now().date())
             if removed:
                 tt.invalidate_index()
+                await self._save()  # 删除也要落盘，否则重启后假期会复活
                 yield event.plain_result(
                     f"🏖 已取消假期「{removed['name']}」（{removed['start']} ~ {removed['end']}），"
                     "这些日期恢复按课表上课。"
@@ -3556,16 +3617,21 @@ class ScheduleLitePlugin(Star):
 
         # 自己的自定义放假（只对自己生效）优先展示
         tt = self._own_tt(event)
-        mine = sorted(
-            (it for it in tt.holidays if it["end"] >= today.isoformat()),
-            key=lambda it: it["start"],
-        ) if tt else []
+        mine = []
+        for it in tt.holidays if tt else []:
+            parsed = _holiday_dates(it)
+            if parsed and parsed[1] >= today:
+                mine.append((parsed[0], parsed[1], it))
+        mine.sort(key=lambda row: row[0])
         if mine:
-            first = mine[0]
-            start = date.fromisoformat(first["start"])
-            days = (start - today).days
-            when = "就是今天" if days == 0 else f"还有 {days} 天"
-            lines.append(f"🏖 {first['name']} · {start:%m/%d}（自己）· {when}")
+            first_start, first_end, first = mine[0]
+            if first_start <= today <= first_end:
+                left = (first_end - today).days
+                when = "今天最后一天" if left == 0 else f"进行中，还剩 {left} 天"
+            else:
+                days = (first_start - today).days
+                when = "就是今天" if days == 0 else f"还有 {days} 天"
+            lines.append(f"🏖 {first.get('name') or '假期'} · {first_start:%m/%d}（自己）· {when}")
             if len(mine) > 1:
                 lines.append(f"   另有 {len(mine) - 1} 条自定义放假，/课表 放假 查看")
 

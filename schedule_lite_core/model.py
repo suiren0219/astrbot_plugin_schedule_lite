@@ -24,8 +24,9 @@ class Section:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Section":
+        data = _as_dict(data)
         return cls(
-            index=int(data.get("index") or 0),
+            index=_safe_int(data.get("index"), 0),
             start=str(data.get("start") or ""),
             end=str(data.get("end") or ""),
             alias=str(data.get("alias") or ""),
@@ -55,10 +56,16 @@ class Course:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Course":
-        weeks = [int(w) for w in (data.get("weeks") or []) if str(w).strip()]
+        data = _as_dict(data)
+        raw_weeks = data.get("weeks") or []
+        weeks = [
+            int(w)
+            for w in (raw_weeks if isinstance(raw_weeks, (list, tuple, set)) else [])
+            if isinstance(w, (int, str)) and str(w).strip().isascii() and str(w).strip().isdigit()
+        ]
         return cls(
             name=str(data.get("name") or ""),
-            day=int(data.get("day") or 0),
+            day=_safe_int(data.get("day"), 0),
             weeks=sorted(set(weeks)),
             start=str(data.get("start") or ""),
             end=str(data.get("end") or ""),
@@ -69,12 +76,31 @@ class Course:
         )
 
 
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def _as_dict_mapping(value: Any) -> dict[str, Any]:
+    return {str(k): v for k, v in value.items()} if isinstance(value, dict) else {}
+
+
+def _as_list(value: Any) -> list[Any]:
+    return list(value) if isinstance(value, (list, tuple)) else []
+
+
+def _safe_int(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError, OverflowError):
+        return default
+
+
 def _opt_int(value: Any) -> int | None:
     if value is None or value == "":
         return None
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -110,7 +136,7 @@ class Timetable:
     group_origins: dict[str, str] = field(default_factory=dict)
     # 请假记录：[{"start": "2026-09-10", "end": "2026-09-12", "reason": "病假"}]
     leaves: list[dict[str, Any]] = field(default_factory=list)
-    # 自定义放假（只对自己生效）：[{"start": "2026-12-30", "end": "12-31", "name": "元旦"}]
+    # 自定义放假（只对自己生效）：[{"start": "2026-12-30", "end": "2026-12-31", "name": "元旦"}]
     holidays: list[dict[str, Any]] = field(default_factory=list)
     # 调课记录：from_date 当天的课程快照移到 to_date
     adjustments: list[dict[str, Any]] = field(default_factory=list)
@@ -134,37 +160,45 @@ class Timetable:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "Timetable":
+        data = _as_dict(data)
+        sections_raw = _as_list(data.get("sections"))
+        courses_raw = _as_list(data.get("courses"))
+        notes = _as_dict_mapping(data.get("notes"))
+        groups_raw = _as_list(data.get("groups"))
+        origins = _as_dict_mapping(data.get("group_origins"))
+        leaves_raw = _as_list(data.get("leaves"))
+        holidays_raw = _as_list(data.get("holidays"))
+        adjustments_raw = _as_list(data.get("adjustments"))
+        makeup_raw = _as_dict_mapping(data.get("makeup_days"))
         return cls(
             owner_id=str(data.get("owner_id") or ""),
             owner_name=str(data.get("owner_name") or ""),
             name=str(data.get("name") or "我的课表"),
             term_start=str(data.get("term_start") or ""),
-            total_weeks=int(data.get("total_weeks") or 20),
+            total_weeks=_safe_int(data.get("total_weeks"), 20) or 20,
             timezone=str(data.get("timezone") or "Asia/Shanghai"),
             source=str(data.get("source") or ""),
             imported_at=str(data.get("imported_at") or ""),
-            sections=[Section.from_dict(s) for s in (data.get("sections") or [])],
-            courses=[Course.from_dict(c) for c in (data.get("courses") or [])],
+            sections=[Section.from_dict(s) for s in sections_raw if isinstance(s, dict)],
+            courses=[Course.from_dict(c) for c in courses_raw if isinstance(c, dict)],
             notify_minutes=_opt_int(data.get("notify_minutes")),
             notify_origin=str(data.get("notify_origin") or ""),
             notify_enabled=bool(data.get("notify_enabled")),
             notified_date=str(data.get("notified_date") or ""),
-            notified_keys=list(data.get("notified_keys") or []),
-            notes={str(k): str(v) for k, v in (data.get("notes") or {}).items()},
+            notified_keys=[str(k) for k in _as_list(data.get("notified_keys"))],
+            notes={str(k): str(v) for k, v in notes.items()},
             abandon_date=str(data.get("abandon_date") or ""),
             abandon_course=str(data.get("abandon_course") or ""),
             abandon_start=str(data.get("abandon_start") or ""),
-            groups=[str(g) for g in (data.get("groups") or [])],
-            group_origins={
-                str(k): str(v) for k, v in (data.get("group_origins") or {}).items()
-            },
+            groups=[str(g) for g in groups_raw],
+            group_origins={str(k): str(v) for k, v in origins.items()},
             leaves=[
                 {
                     "start": str(item.get("start") or ""),
                     "end": str(item.get("end") or item.get("start") or ""),
                     "reason": str(item.get("reason") or ""),
                 }
-                for item in (data.get("leaves") or [])
+                for item in leaves_raw
                 if isinstance(item, dict) and item.get("start")
             ],
             holidays=[
@@ -173,18 +207,18 @@ class Timetable:
                     "end": str(item.get("end") or item.get("start") or ""),
                     "name": str(item.get("name") or ""),
                 }
-                for item in (data.get("holidays") or [])
+                for item in holidays_raw
                 if isinstance(item, dict) and item.get("start")
             ],
             adjustments=[
                 dict(item)
-                for item in (data.get("adjustments") or [])
+                for item in adjustments_raw
                 if isinstance(item, dict) and item.get("from_date") and item.get("to_date")
             ],
             makeup_days={
                 str(k): int(v)
-                for k, v in (data.get("makeup_days") or {}).items()
-                if str(v).isdigit() and 1 <= int(v) <= 7
+                for k, v in makeup_raw.items()
+                if str(v).isascii() and str(v).strip().isdigit() and 1 <= int(v) <= 7
             },
             raw_source=str(data.get("raw_source") or ""),
             term_guessed=bool(data.get("term_guessed")),
@@ -251,6 +285,9 @@ class Timetable:
         for item in self.holidays:
             start = str(item.get("start") or "")
             end = str(item.get("end") or start)
+            # 兼容旧数据里「12-31」这种不带年份的 end，按 start 的年份补齐
+            if len(end) == 5 and len(start) >= 10:
+                end = f"{start[:4]}-{end}"
             if start and start <= key <= end:
                 return item
         return None

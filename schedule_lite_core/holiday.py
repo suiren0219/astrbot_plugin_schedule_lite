@@ -66,12 +66,23 @@ class HolidayCalendar:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return cls(year=year)
-        if not isinstance(payload, dict) or int(payload.get("year") or 0) != year:
+        if not isinstance(payload, dict):
             return cls(year=year)
-        days = payload.get("days")
+        try:
+            same_year = int(payload.get("year") or 0) == year
+        except (TypeError, ValueError):
+            return cls(year=year)
+        if not same_year:
+            return cls(year=year)
+        raw_days = payload.get("days")
+        days = (
+            {str(k): v for k, v in raw_days.items() if isinstance(v, dict)}
+            if isinstance(raw_days, dict)
+            else {}
+        )
         return cls(
             year=year,
-            days=days if isinstance(days, dict) else {},
+            days=days,
             source=str(payload.get("source") or ""),
             updated_at=str(payload.get("updated_at") or ""),
         )
@@ -93,8 +104,11 @@ class HolidayCalendar:
             return True
         try:
             updated = datetime.fromisoformat(self.updated_at)
-        except ValueError:
+        except (TypeError, ValueError):
             return True
+        if updated.tzinfo is None:
+            # 旧版缓存 / 手改文件可能没有时区，按上海时间补齐而不是抛 TypeError
+            updated = updated.replace(tzinfo=get_tz("Asia/Shanghai"))
         return datetime.now(get_tz("Asia/Shanghai")) - updated > timedelta(hours=max_age_hours)
 
 
