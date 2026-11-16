@@ -91,7 +91,7 @@ def _int(value: Any, default: int = 0) -> int:
         if value is None or isinstance(value, bool):
             return default
         return int(float(str(value).strip()))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
@@ -129,6 +129,12 @@ def _sections_from_times(times: Any, settings: dict[str, Any]) -> list[Section]:
 
 def _course_weeks(item: dict[str, Any], total_weeks: int) -> list[int]:
     selected = item.get("selectedWeeks")
+    if not isinstance(selected, list):
+        # 有的导出把周次写在 weeks / weekList 里；忽略它会让课程整学期出现。
+        for key in ("weeks", "weekList", "week_list"):
+            if isinstance(item.get(key), list):
+                selected = item[key]
+                break
     if isinstance(selected, list):
         weeks = sorted({_int(w, 0) for w in selected if _int(w, 0) > 0})
         if weeks:

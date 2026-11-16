@@ -35,9 +35,17 @@ def looks_like(data: Any) -> bool:
         k in config for k in ("semesterStartDate", "semesterTotalWeeks", "firstDayOfWeek")
     ):
         return True
-    # 兼容只有课程数组、但字段明显是拾光风格的导出
+    # 兼容只有课程数组、但字段明显是拾光风格的导出；文件自带通用作息表
+    # （sections / timeSlots 等）时应交给 generic，否则会被默认作息覆盖。
+    generic_sections = any(
+        k in data for k in ("sections", "time_slots", "sectionTimes", "作息", "作息时间")
+    )
     sample = next((c for c in courses if isinstance(c, dict)), None)
-    return bool(sample and ("startSection" in sample or "endSection" in sample))
+    return bool(
+        sample
+        and not generic_sections
+        and ("startSection" in sample or "endSection" in sample)
+    )
 
 
 def _pick(data: dict[str, Any], *keys: str) -> Any:

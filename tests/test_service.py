@@ -1,4 +1,5 @@
-from datetime import datetime
+import json
+from datetime import date, datetime
 
 import pytest
 
@@ -549,3 +550,117 @@ def test_global_makeup_weekday_map():
     tt.makeup_days["2026-10-10"] = 5
     personal = format_day(tt, date(2026, 10, 10), holiday=calendar)
     assert "按周五课表" in personal
+
+
+# ---------------------------------------------------------------- 回归：存档健壮性 / 节假日缓存
+
+
+def test_storage_keeps_unparsable_users_on_save(tmp_path):
+    """一条坏记录不能让其他用户在下一次 save() 时被静默删掉。"""
+    path = tmp_path / "timetables.json"
+    good = lambda oid: {"owner_id": oid, "courses": [], "sections": []}
+    path.write_text(
+        json.dumps(
+            {
+                "users": {
+                    "a:1": good("a:1"),
+                    "b:2": {**good("b:2"), "notes": ["oops"]},
+                    "c:3": good("c:3"),
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    store = TimetableStore(path)
+    # 结构轻微异常的记录现在会被 from_dict 收敛，绝不能因此让 a:1 / c:3 消失
+    assert sorted(store.all()) == ["a:1", "b:2", "c:3"]
+    assert store.get("b:2").notes == {}
+    store.save()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert sorted(saved["users"]) == ["a:1", "b:2", "c:3"]
+
+
+def test_storage_writes_back_orphan_records(monkeypatch):
+    """真有一条记录解析不了时，save() 也要把原始内容原样写回。"""
+    import tempfile
+
+    from schedule_lite_core.model import Timetable as _Timetable
+
+    from pathlib import Path
+
+    path = Path(tempfile.mkdtemp()) / "timetables.json"
+    raw = {
+        "users": {
+            "a:1": {"owner_id": "a:1", "courses": [], "sections": []},
+            "b:2": {"owner_id": "b:2", "explodes": True},
+        }
+    }
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    original = _Timetable.from_dict.__func__
+
+    def flaky(cls, data):
+        if data.get("explodes"):
+            raise RuntimeError("模拟未来版本无法解析的字段")
+        return original(cls, data)
+
+    monkeypatch.setattr(_Timetable, "from_dict", classmethod(flaky))
+    store = TimetableStore(path)
+    assert sorted(store.all()) == ["a:1"]
+    store.save()
+    monkeypatch.undo()
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert sorted(saved["users"]) == ["a:1", "b:2"]
+    assert saved["users"]["b:2"] == raw["users"]["b:2"]
+
+
+def test_storage_wrong_shape_is_quarantined_not_zeroed(tmp_path):
+    """users 形状不对时禁止写空盘，并留下 .broken 现场。"""
+    path = tmp_path / "timetables.json"
+    path.write_text(json.dumps([{"owner_id": "a:1"}]), encoding="utf-8")
+    store = TimetableStore(path)
+    store.all()
+    try:
+        store.save()
+        assert False, "应拒绝覆盖被隔离的存档"
+    except ValueError:
+        pass
+    assert not path.exists() or json.loads(path.read_text(encoding="utf-8"))["users"]
+    assert path.with_suffix(".json.broken").exists()
+
+
+def test_holiday_cache_tolerates_corrupt_fields(tmp_path):
+    from schedule_lite_core.holiday import HolidayCalendar
+
+    bad_year = tmp_path / "bad-year.json"
+    bad_year.write_text('{"year": "2026年", "days": {}}', encoding="utf-8")
+    assert HolidayCalendar.load(bad_year, 2026).days == {}
+
+    bad_days = tmp_path / "bad-days.json"
+    bad_days.write_text('{"year": 2026, "days": {"2026-01-01": "元旦"}}', encoding="utf-8")
+    assert HolidayCalendar.load(bad_days, 2026).is_off(date(2026, 1, 1)) is False
+
+    naive = tmp_path / "naive.json"
+    naive.write_text(
+        '{"year": 2026, "updated_at": "2026-01-01T00:00:00", "days": {}}',
+        encoding="utf-8",
+    )
+    assert HolidayCalendar.load(naive, 2026).stale(24) is True
+
+
+def test_parse_query_date_cross_year():
+    assert parse_query_date("12/30", date(2026, 11, 30)) == date(2026, 12, 30)
+    assert parse_query_date("1/1", date(2026, 11, 30)) == date(2027, 1, 1)
+
+
+def test_holiday_on_legacy_short_end():
+    from schedule_lite_core.model import Course
+
+    tt = Timetable(
+        owner_id="u1",
+        term_start="2026-08-31",
+        total_weeks=20,
+        courses=[Course(name="课", day=3, weeks=[1], start="08:00", end="09:40")],
+        holidays=[{"start": "2026-12-30", "end": "12-31", "name": "元旦"}],
+    )
+    assert tt.holiday_on(date(2026, 12, 30)) is not None
+    assert tt.holiday_on(date(2026, 12, 31)) is not None

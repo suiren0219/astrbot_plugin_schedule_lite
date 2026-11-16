@@ -3162,3 +3162,92 @@ def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
     # 旧的日期目录被清理
     remaining = sorted(d.name for d in cache.iterdir() if d.is_dir())
     assert "20250101" not in remaining and len(remaining) <= 3
+
+
+# ---------------------------------------------------------------- 回归：本次修复
+
+
+def test_holiday_delete_is_persisted(plugin, tmp_path):
+    """/课表 放假 删除 必须落盘，否则重启后假期复活。"""
+    from schedule_lite_core.model import Timetable
+
+    plugin.store.put("test:10001", Timetable(owner_id="10001", term_start="2026-08-31"))
+    outs = asyncio.run(_collect(plugin._h_holiday(_Event(""), "12/30 元旦")))
+    assert "已放假" in outs[0]
+    assert json.loads(plugin.store.path.read_text(encoding="utf-8"))["users"]["test:10001"]["holidays"]
+
+    outs = asyncio.run(_collect(plugin._h_holiday(_Event(""), "删除 12/30")))
+    assert "已取消假期" in outs[0]
+    saved = json.loads(plugin.store.path.read_text(encoding="utf-8"))
+    assert saved["users"]["test:10001"]["holidays"] == []
+
+
+def test_holiday_cross_year_range(plugin):
+    """帮助文档里的 12/30-1/1 示例必须能跨年。"""
+    from datetime import date as _date
+
+    from schedule_lite_core.model import Timetable
+
+    plugin.store.put("test:10001", Timetable(owner_id="10001", term_start="2026-08-31"))
+    outs = asyncio.run(_collect(plugin._h_holiday(_Event(""), "12/30-1/1 春节")))
+    assert "已放假" in outs[0], outs[0]
+    holidays = plugin.store.get("test:10001").holidays
+    assert len(holidays) == 1
+    start, end = _date.fromisoformat(holidays[0]["start"]), _date.fromisoformat(holidays[0]["end"])
+    assert (end - start).days == 2
+
+
+def test_countdown_ongoing_holiday_has_no_negative_days(plugin):
+    from datetime import timedelta
+
+    from schedule_lite_core.model import Timetable
+
+    today = plugin._now().date()
+    tt = Timetable(
+        owner_id="10001",
+        term_start="2026-08-31",
+        holidays=[{
+            "start": (today - timedelta(days=2)).isoformat(),
+            "end": (today + timedelta(days=2)).isoformat(),
+            "name": "小长假",
+        }],
+    )
+    plugin.store.put("test:10001", tt)
+    outs = asyncio.run(_collect(plugin._h_countdown(_Event(""))))
+    assert "还有 -" not in outs[0]
+    assert "进行中" in outs[0]
+
+
+def test_private_chat_cannot_bypass_cross_group_privacy(plugin):
+    """默认 allow_cross_group=false 时私聊也不能按 QQ 号查任意用户。"""
+    from schedule_lite_core.model import Timetable
+
+    own = Timetable(owner_id="10001", term_start="2026-08-31")
+    other = Timetable(owner_id="20002", owner_name="别人", term_start="2026-08-31")
+    plugin.store.put("test:10001", own)
+    plugin.store.put("test:20002", other)
+    event = _Event("/课表 20002")  # 私聊：group_id 为空
+    outs = asyncio.run(_collect(plugin._h_query(event, "20002")))
+    assert any("保护隐私" in line or "对方还没有在本群" in line for line in outs)
+
+
+def test_sender_id_never_falls_back_to_session_id():
+    import main as plugin_main
+
+    class _NoSender:
+        def get_sender_id(self):
+            return ""
+
+        def get_session_id(self):
+            return "群号会串档"
+
+    assert plugin_main.ScheduleLitePlugin._sender_id(_NoSender()) == ""
+
+
+def test_broadcast_state_bad_failure_count_does_not_crash(plugin, tmp_path):
+    plugin._broadcast_state_path().write_text(
+        json.dumps({"claims": {}, "failures": {"recap": {"123": ["2026-01-01", "abc"]}}}),
+        encoding="utf-8",
+    )
+    plugin._load_broadcast_state()  # 不应抛 ValueError 导致 initialize() 失败
+    assert plugin._broadcast_failures["recap"]["123"] == ("2026-01-01", 0)

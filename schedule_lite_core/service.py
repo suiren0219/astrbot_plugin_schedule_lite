@@ -764,7 +764,7 @@ def parse_query_date(text: str, today: date | None = None) -> date | None:
         # 不写前缀时取“最近一次”，今天就是该星期几则取今天
         return today + timedelta(days=(weekday - today.isoweekday()) % 7)
 
-    return parse_date(t)
+    return parse_date(t, today=today)
 
 
 def group_visible(tt: Timetable, group_id: str) -> bool:

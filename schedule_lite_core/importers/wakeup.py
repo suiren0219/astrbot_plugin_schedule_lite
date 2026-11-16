@@ -79,6 +79,18 @@ async def fetch_share(session, code: str, timeout_s: int = 15) -> str:
     raise ImportFailure(f"读取 WakeUp 课表失败：{last_error or '口令无效或已过期'}")
 
 
+def looks_like_backup(data: Any) -> bool:
+    """单文档 JSON 数组形式的 WakeUp 备份（首元素可能是 [1] / 作息 / 表名）。
+
+    只认「数组 + 作息/课表信息 + 课程实例」这种整体结构，避免把普通课程
+    数组（用了 courseName / startWeek 之类字段）误判成 WakeUp 备份。
+    """
+    if not isinstance(data, list):
+        return False
+    nodes, info, infos, instances = _parse_instances(data)
+    return bool(instances and (nodes or info))
+
+
 def _classify(obj: Any, nodes: list, info: dict, infos: list, instances: list) -> None:
     if isinstance(obj, list):
         for item in obj:

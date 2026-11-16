@@ -95,6 +95,17 @@ def parse_text(
                 tz=tz,
                 name=source_name or "拾光课表",
             )
+        # 单文档 JSON 数组形式的 WakeUp 备份：首元素可能是 [1] / 作息 / 表名，
+        # 不能只看 obj[0]。有 WakeUp 特征字段时交给 parse_backup 全量分类。
+        if wakeup.looks_like_backup(obj):
+            return wakeup.parse_backup(
+                obj,
+                fallback_sections=fallback_sections,
+                default_total_weeks=default_total_weeks,
+                store_teacher=store_teacher,
+                store_location=store_location,
+                tz=tz,
+            )
         if (
             isinstance(obj, list)
             and obj
