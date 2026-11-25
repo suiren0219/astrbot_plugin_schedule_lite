@@ -36,6 +36,17 @@ HEADERS = {
     "accept": "application/json",
 }
 _CODE_RE = re.compile(r"^[0-9A-Za-z_-]{12,}$")
+_SHARE_TEXT_RE = re.compile(
+    r"这是来自\s*「WakeUp\s*课程表」\s*的课表分享.*?"
+    r"分享口令为\s*[:：]?\s*「([0-9a-f]{32})」[。！!\s]*",
+    re.I | re.S,
+)
+
+
+def extract_share_code(text: str) -> str | None:
+    """只识别 App 的完整分享文案，避免无前缀导入误触发普通聊天。"""
+    match = _SHARE_TEXT_RE.fullmatch((text or "").strip())
+    return match.group(1) if match else None
 
 
 def looks_like_code(text: str) -> bool:
@@ -77,6 +88,18 @@ async def fetch_share(session, code: str, timeout_s: int = 15) -> str:
             return json.dumps(data, ensure_ascii=False)
         last_error = str(payload.get("message") or payload.get("msg") or payload.get("code") or "无数据")
     raise ImportFailure(f"读取 WakeUp 课表失败：{last_error or '口令无效或已过期'}")
+
+
+def looks_like_backup(data: Any) -> bool:
+    """单文档 JSON 数组形式的 WakeUp 备份（首元素可能是 [1] / 作息 / 表名）。
+
+    只认「数组 + 作息/课表信息 + 课程实例」这种整体结构，避免把普通课程
+    数组（用了 courseName / startWeek 之类字段）误判成 WakeUp 备份。
+    """
+    if not isinstance(data, list):
+        return False
+    nodes, info, infos, instances = _parse_instances(data)
+    return bool(instances and (nodes or info))
 
 
 def _classify(obj: Any, nodes: list, info: dict, infos: list, instances: list) -> None:

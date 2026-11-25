@@ -2,10 +2,22 @@ import asyncio
 import json
 from datetime import date
 
-from schedule_lite_core.importers import detect, generic, ics, shiguang, wakeup
+import pytest
+
+from schedule_lite_core.importers import detect, generic, ics, nexio, shiguang, wakeup
+from schedule_lite_core.importers.base import ImportFailure
 
 
 # ---------------------------------------------------------------- WakeUp
+
+
+WAKEUP_SHARE_CODE = "0123456789abcdef0123456789abcdef"
+WAKEUP_SHARE_TEXT = (
+    "这是来自「WakeUp课程表」的课表分享，30分钟内有效哦，如果失效请朋友再分享一遍叭。"
+    "为了保护隐私我们选择不监听你的剪贴板，请复制这条消息后，打开App的主界面，"
+    "右上角第二个按钮 -> 从分享口令导入，按操作提示即可完成导入~"
+    f"分享口令为「{WAKEUP_SHARE_CODE}」"
+)
 
 
 def _wakeup_payload() -> str:
@@ -42,6 +54,37 @@ def _wakeup_payload() -> str:
         json.dumps(instances, ensure_ascii=False),
     ]
     return "\n".join(lines)
+
+
+def test_wakeup_share_text_via_detect(monkeypatch):
+    seen = []
+
+    async def fake_fetch_share(session, code):
+        seen.append(code)
+        return _wakeup_payload()
+
+    async def unexpected_fetch(url):
+        raise AssertionError("WakeUp 分享文案不应请求 Nexio")
+
+    monkeypatch.setattr(wakeup, "fetch_share", fake_fetch_share)
+    result = asyncio.run(detect.import_any(WAKEUP_SHARE_TEXT, fetch=unexpected_fetch))
+    assert seen == [WAKEUP_SHARE_CODE]
+    assert result.source_kind == "wakeup"
+    assert result.name == "2026 秋"
+    assert result.courses
+
+
+def test_wakeup_share_text_keeps_failure(monkeypatch):
+    async def fake_fetch_share(session, code):
+        assert code == WAKEUP_SHARE_CODE
+        raise ImportFailure("读取 WakeUp 课表失败：当前版本过低，请升级")
+
+    async def unexpected_fetch(url):
+        raise AssertionError("明确来自 WakeUp 的文案失败后不应回退 Nexio")
+
+    monkeypatch.setattr(wakeup, "fetch_share", fake_fetch_share)
+    with pytest.raises(ImportFailure, match="WakeUp.*当前版本过低"):
+        asyncio.run(detect.import_any(WAKEUP_SHARE_TEXT, fetch=unexpected_fetch))
 
 
 def test_wakeup_parse():
@@ -633,3 +676,81 @@ END:VCALENDAR
     course = result.courses[0]
     assert course.teacher == ""
     assert course.location == ""
+
+
+# ---------------------------------------------------------------- 回归：自动识别 / 格式兼容
+
+
+def test_generic_json_with_sections_is_not_hijacked_by_shiguang():
+    """自带 sections 的通用 JSON 不能被拾光导入器套上默认作息。"""
+    payload = {
+        "sections": [
+            {"index": 1, "start": "09:30", "end": "10:15"},
+            {"index": 2, "start": "10:25", "end": "11:10"},
+        ],
+        "courses": [
+            {"name": "高数", "day": 1, "startSection": 1, "endSection": 2, "weeks": [1, 2, 3]}
+        ],
+    }
+    result = detect.parse_text(json.dumps(payload, ensure_ascii=False))
+    assert result.source == "通用 JSON"
+    assert (result.courses[0].start, result.courses[0].end) == ("09:30", "11:10")
+
+
+def test_wakeup_backup_as_single_json_array():
+    """备份被合并成单个 JSON 文档时，首元素不一定是该课程实例。"""
+    payload = [
+        1,
+        [{"node": 1, "startTime": "08:00", "endTime": "08:45"}],
+        {"tableName": "2026 秋", "startDate": "2026-09-07", "totalWeek": 20},
+        [{"id": 1, "courseName": "高等数学"}],
+        [{"id": 1, "day": 1, "startWeek": 1, "endWeek": 8, "startNode": 1,
+          "step": 1, "room": "A101", "teacher": "张老师", "type": 0}],
+    ]
+    result = detect.parse_text(json.dumps(payload, ensure_ascii=False))
+    assert result.source == "WakeUp 课程表"
+    assert len(result.courses) == 1
+    assert result.term_start == date(2026, 9, 7)
+
+
+def test_wakeup_detection_does_not_hijack_generic_json():
+    """普通课程数组不能被当成 WakeUp 备份整表接管。"""
+    payload = {
+        "courses": [
+            {"name": "高数", "day": 1, "weeks": [1, 2, 3], "start": "08:00", "end": "09:40"}
+        ]
+    }
+    result = detect.parse_text(json.dumps(payload, ensure_ascii=False))
+    assert result.source == "通用 JSON"
+
+
+def test_ics_numeric_utc_offset():
+    """RFC 5545 的数字 UTC 偏移不能让整个事件被当成全天事件丢掉。"""
+    text = """BEGIN:VCALENDAR
+VERSION:2.0
+BEGIN:VEVENT
+UID:offset-1
+SUMMARY:高等数学
+DTSTART:20260907T080000+08:00
+DTEND:20260907T094000+08:00
+END:VEVENT
+END:VCALENDAR
+"""
+    result = ics.parse_ics(text)
+    assert len(result.courses) == 1
+    assert (result.courses[0].start, result.courses[0].end) == ("08:00", "09:40")
+
+
+def test_nexio_weeks_field_is_honored():
+    payload = {
+        "settings": {"class_start_time": "2026-09-07", "semester_weeks": 20},
+        "times": {"morning": [{"start": "08:00", "end": "08:45"}]},
+        "courses": [
+            {"name": "高数", "dayOfWeek": 1, "startSection": 1, "step": 1,
+             "weeks": [1, 2, 3]}
+        ],
+    }
+    result = nexio.parse_export(payload)
+    course = next((c for c in result.courses if c.name == "高数"), None)
+    assert course is not None
+    assert course.weeks == [1, 2, 3]

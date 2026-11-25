@@ -13,6 +13,9 @@ plugin_data/
 *.log
 *.tmp
 gcm-diagnose.log
+# 本地进度卡：含工作区绝对路径，不纳入版本控制
+PROGRESS.md
+
 
 # 截图和构建产物
 panel-*.png

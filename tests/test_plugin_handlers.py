@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from .test_importers import SHIGUANG_SAMPLE
+from .test_importers import (
+    SHIGUANG_SAMPLE,
+    WAKEUP_SHARE_CODE,
+    WAKEUP_SHARE_TEXT,
+    _wakeup_payload,
+)
 
 
 def _install_astrbot_stub() -> None:
@@ -2357,6 +2362,103 @@ def test_payload_wins_over_quote(plugin):
     assert "已导入课表「显式参数」" in outs[0]
 
 
+@pytest.mark.parametrize("group", ["", "g1"])
+@pytest.mark.parametrize("text", [
+    WAKEUP_SHARE_TEXT,
+    WAKEUP_SHARE_TEXT.replace("~分享", "~\n分享").replace("口令为「", "口令为：\n「"),
+])
+def test_wakeup_share_auto_import(plugin, monkeypatch, group, text):
+    from schedule_lite_core.importers import wakeup
+
+    seen = []
+
+    async def fake_fetch_share(session, code):
+        seen.append(code)
+        return _wakeup_payload()
+
+    async def unexpected_api_fetch(url):
+        raise AssertionError("WakeUp 分享文案不应访问 Nexio")
+
+    plugin._http = object()  # 仅用于通过 allow_network 判断
+    monkeypatch.setattr(wakeup, "fetch_share", fake_fetch_share)
+    monkeypatch.setattr(plugin, "_fetch_api", unexpected_api_fetch)
+    event = _Event(text, group=group)
+    outs = asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event)))
+    assert len(outs) == 1
+    assert "已导入课表「2026 秋」" in outs[0]
+    assert "WakeUp" in outs[0]
+    assert seen == [WAKEUP_SHARE_CODE]
+    assert event.stopped is True
+    tt = plugin.store.get("test:10001")
+    assert tt.courses
+    assert tt.groups == ([group] if group else [])
+    raw_path = plugin._plugin_data_dir() / tt.raw_source
+    assert raw_path.read_text(encoding="utf-8") == text
+
+
+@pytest.mark.parametrize("text", [
+    "今天讨论一下 WakeUp 课程表的分享功能",
+    WAKEUP_SHARE_CODE,
+    f"分享口令为「{WAKEUP_SHARE_CODE}」",
+    WAKEUP_SHARE_TEXT.replace(WAKEUP_SHARE_CODE, WAKEUP_SHARE_CODE[:-1]),
+    WAKEUP_SHARE_TEXT.replace(WAKEUP_SHARE_CODE, "g" * 32),
+    "/课表 导入 " + WAKEUP_SHARE_TEXT,
+    WAKEUP_SHARE_TEXT + " 这条消息应该怎样导入？",
+])
+def test_wakeup_share_auto_import_ignores_other_text(plugin, text):
+    plugin.config["allow_network"] = False
+    event = _Event(text, group="g1")
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+@pytest.mark.parametrize("component", ["Reply", "File"])
+def test_wakeup_share_auto_import_skips_reply_and_file(plugin, component):
+    from astrbot.api.message_components import File, Reply
+
+    plugin.config["allow_network"] = False
+    event = _Event(WAKEUP_SHARE_TEXT, group="g1")
+    event.message_obj.message = [
+        Reply(id="1") if component == "Reply" else File(name="课表.ics", file="/nonexistent.ics")
+    ]
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+def test_wakeup_share_auto_import_skips_claimed_message(plugin):
+    event = _Event(WAKEUP_SHARE_TEXT, group="g1")
+    event.get_extra = lambda key, default=None: {} if key == "parsed_params" else default
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+@pytest.mark.parametrize(("mode", "group"), [("whitelist", "g2"), ("blacklist", "g1")])
+def test_wakeup_share_auto_import_respects_session_scope(plugin, mode, group):
+    plugin.config["allow_network"] = False
+    plugin.config["session_scope_mode"] = mode
+    plugin.config["session_scope_list"] = "g1"
+    event = _Event(WAKEUP_SHARE_TEXT, group=group)
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+def test_wakeup_share_auto_import_respects_network_setting(plugin):
+    _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    old = plugin.store.get("test:10001")
+    plugin._http = object()  # 会话可用时仍应遵守禁止联网配置
+    plugin.config["allow_network"] = False
+    event = _Event(WAKEUP_SHARE_TEXT, group="g1")
+    outs = asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event)))
+    assert len(outs) == 1
+    assert "禁止联网导入" in outs[0]
+    assert event.stopped is True
+    assert plugin.store.get("test:10001") is old
+
+
 def test_bare_file_auto_import_private(plugin, tmp_path):
     from astrbot.api.message_components import File
 
@@ -3162,3 +3264,92 @@ def test_render_prunes_old_day_dirs(image_plugin, tmp_path):
     # 旧的日期目录被清理
     remaining = sorted(d.name for d in cache.iterdir() if d.is_dir())
     assert "20250101" not in remaining and len(remaining) <= 3
+
+
+# ---------------------------------------------------------------- 回归：本次修复
+
+
+def test_holiday_delete_is_persisted(plugin, tmp_path):
+    """/课表 放假 删除 必须落盘，否则重启后假期复活。"""
+    from schedule_lite_core.model import Timetable
+
+    plugin.store.put("test:10001", Timetable(owner_id="10001", term_start="2026-08-31"))
+    outs = asyncio.run(_collect(plugin._h_holiday(_Event(""), "12/30 元旦")))
+    assert "已放假" in outs[0]
+    assert json.loads(plugin.store.path.read_text(encoding="utf-8"))["users"]["test:10001"]["holidays"]
+
+    outs = asyncio.run(_collect(plugin._h_holiday(_Event(""), "删除 12/30")))
+    assert "已取消假期" in outs[0]
+    saved = json.loads(plugin.store.path.read_text(encoding="utf-8"))
+    assert saved["users"]["test:10001"]["holidays"] == []
+
+
+def test_holiday_cross_year_range(plugin):
+    """帮助文档里的 12/30-1/1 示例必须能跨年。"""
+    from datetime import date as _date
+
+    from schedule_lite_core.model import Timetable
+
+    plugin.store.put("test:10001", Timetable(owner_id="10001", term_start="2026-08-31"))
+    outs = asyncio.run(_collect(plugin._h_holiday(_Event(""), "12/30-1/1 春节")))
+    assert "已放假" in outs[0], outs[0]
+    holidays = plugin.store.get("test:10001").holidays
+    assert len(holidays) == 1
+    start, end = _date.fromisoformat(holidays[0]["start"]), _date.fromisoformat(holidays[0]["end"])
+    assert (end - start).days == 2
+
+
+def test_countdown_ongoing_holiday_has_no_negative_days(plugin):
+    from datetime import timedelta
+
+    from schedule_lite_core.model import Timetable
+
+    today = plugin._now().date()
+    tt = Timetable(
+        owner_id="10001",
+        term_start="2026-08-31",
+        holidays=[{
+            "start": (today - timedelta(days=2)).isoformat(),
+            "end": (today + timedelta(days=2)).isoformat(),
+            "name": "小长假",
+        }],
+    )
+    plugin.store.put("test:10001", tt)
+    outs = asyncio.run(_collect(plugin._h_countdown(_Event(""))))
+    assert "还有 -" not in outs[0]
+    assert "进行中" in outs[0]
+
+
+def test_private_chat_cannot_bypass_cross_group_privacy(plugin):
+    """默认 allow_cross_group=false 时私聊也不能按 QQ 号查任意用户。"""
+    from schedule_lite_core.model import Timetable
+
+    own = Timetable(owner_id="10001", term_start="2026-08-31")
+    other = Timetable(owner_id="20002", owner_name="别人", term_start="2026-08-31")
+    plugin.store.put("test:10001", own)
+    plugin.store.put("test:20002", other)
+    event = _Event("/课表 20002")  # 私聊：group_id 为空
+    outs = asyncio.run(_collect(plugin._h_query(event, "20002")))
+    assert any("保护隐私" in line or "对方还没有在本群" in line for line in outs)
+
+
+def test_sender_id_never_falls_back_to_session_id():
+    import main as plugin_main
+
+    class _NoSender:
+        def get_sender_id(self):
+            return ""
+
+        def get_session_id(self):
+            return "群号会串档"
+
+    assert plugin_main.ScheduleLitePlugin._sender_id(_NoSender()) == ""
+
+
+def test_broadcast_state_bad_failure_count_does_not_crash(plugin, tmp_path):
+    plugin._broadcast_state_path().write_text(
+        json.dumps({"claims": {}, "failures": {"recap": {"123": ["2026-01-01", "abc"]}}}),
+        encoding="utf-8",
+    )
+    plugin._load_broadcast_state()  # 不应抛 ValueError 导致 initialize() 失败
+    assert plugin._broadcast_failures["recap"]["123"] == ("2026-01-01", 0)
