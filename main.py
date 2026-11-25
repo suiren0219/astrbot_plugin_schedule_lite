@@ -54,7 +54,7 @@ _BROADCAST_WINDOW_MIN = 180
 try:
     from .schedule_lite_core import render as render_mod
     from .schedule_lite_core.holiday import HolidayCalendar, fetch_calendar
-    from .schedule_lite_core.importers import detect
+    from .schedule_lite_core.importers import detect, wakeup
     from .schedule_lite_core.importers.base import ImportFailure
     from .schedule_lite_core.importers.generic import dumps_export
     from .schedule_lite_core.model import Course, Timetable
@@ -95,7 +95,7 @@ except ImportError:  # pragma: no cover - AstrBot 以脚本方式加载时
         sys.path.insert(0, PLUGIN_DIR)
     from schedule_lite_core import render as render_mod
     from schedule_lite_core.holiday import HolidayCalendar, fetch_calendar
-    from schedule_lite_core.importers import detect
+    from schedule_lite_core.importers import detect, wakeup
     from schedule_lite_core.importers.base import ImportFailure
     from schedule_lite_core.importers.generic import dumps_export
     from schedule_lite_core.model import Course, Timetable
@@ -1170,6 +1170,22 @@ class ScheduleLitePlugin(Star):
             normalized = rest
         event.stop_event()
         async for item in self._dispatch(event, rest_override=normalized):
+            yield item
+
+    @filter.event_message_type(filter.EventMessageType.ALL)
+    async def cmd_wakeup_auto_import(self, event):
+        """直接发送 WakeUp App 的完整分享文案即可导入。"""
+        if event.get_extra("parsed_params") is not None:
+            return
+        text = (event.message_str or "").strip()
+        if not wakeup.extract_share_code(text):
+            return
+        if any(c.__class__.__name__ in {"Reply", "File"} for c in self._messages(event)):
+            return  # 引用和附件仍走原有导入入口
+        if not self._session_allowed(event):
+            return
+        event.stop_event()
+        async for item in self._h_import(event, text):
             yield item
 
     @filter.event_message_type(filter.EventMessageType.ALL)

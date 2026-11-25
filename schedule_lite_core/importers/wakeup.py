@@ -36,6 +36,17 @@ HEADERS = {
     "accept": "application/json",
 }
 _CODE_RE = re.compile(r"^[0-9A-Za-z_-]{12,}$")
+_SHARE_TEXT_RE = re.compile(
+    r"这是来自\s*「WakeUp\s*课程表」\s*的课表分享.*?"
+    r"分享口令为\s*[:：]?\s*「([0-9a-f]{32})」[。！!\s]*",
+    re.I | re.S,
+)
+
+
+def extract_share_code(text: str) -> str | None:
+    """只识别 App 的完整分享文案，避免无前缀导入误触发普通聊天。"""
+    match = _SHARE_TEXT_RE.fullmatch((text or "").strip())
+    return match.group(1) if match else None
 
 
 def looks_like_code(text: str) -> bool:

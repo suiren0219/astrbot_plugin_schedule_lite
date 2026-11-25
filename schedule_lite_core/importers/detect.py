@@ -196,7 +196,9 @@ async def import_any(
         )
 
     # 2) Nexio 分享口令（中文趣味短语，30 分钟内有效）
-    nexio_code = nexio.extract_code(text)
+    # WakeUp 完整文案里的“从分享口令导入”不能被当成 Nexio 中文口令。
+    wakeup_share_code = wakeup.extract_share_code(text)
+    nexio_code = None if wakeup_share_code else nexio.extract_code(text)
     is_local_payload = _looks_json(text) or "BEGIN:VCALENDAR" in text[:200].upper()
     if (
         nexio_code
@@ -219,7 +221,7 @@ async def import_any(
         )
 
     # 3) WakeUp 分享口令（形如「xxxxx」，或一整串字母数字）
-    code = wakeup.extract_code(text)
+    code = wakeup_share_code or wakeup.extract_code(text)
     quoted_code = bool(re.search(r"「([0-9A-Za-z\-_]{6,})」", text))
     if (
         code

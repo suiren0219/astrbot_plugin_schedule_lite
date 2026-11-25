@@ -2,10 +2,22 @@ import asyncio
 import json
 from datetime import date
 
+import pytest
+
 from schedule_lite_core.importers import detect, generic, ics, nexio, shiguang, wakeup
+from schedule_lite_core.importers.base import ImportFailure
 
 
 # ---------------------------------------------------------------- WakeUp
+
+
+WAKEUP_SHARE_CODE = "0123456789abcdef0123456789abcdef"
+WAKEUP_SHARE_TEXT = (
+    "这是来自「WakeUp课程表」的课表分享，30分钟内有效哦，如果失效请朋友再分享一遍叭。"
+    "为了保护隐私我们选择不监听你的剪贴板，请复制这条消息后，打开App的主界面，"
+    "右上角第二个按钮 -> 从分享口令导入，按操作提示即可完成导入~"
+    f"分享口令为「{WAKEUP_SHARE_CODE}」"
+)
 
 
 def _wakeup_payload() -> str:
@@ -42,6 +54,37 @@ def _wakeup_payload() -> str:
         json.dumps(instances, ensure_ascii=False),
     ]
     return "\n".join(lines)
+
+
+def test_wakeup_share_text_via_detect(monkeypatch):
+    seen = []
+
+    async def fake_fetch_share(session, code):
+        seen.append(code)
+        return _wakeup_payload()
+
+    async def unexpected_fetch(url):
+        raise AssertionError("WakeUp 分享文案不应请求 Nexio")
+
+    monkeypatch.setattr(wakeup, "fetch_share", fake_fetch_share)
+    result = asyncio.run(detect.import_any(WAKEUP_SHARE_TEXT, fetch=unexpected_fetch))
+    assert seen == [WAKEUP_SHARE_CODE]
+    assert result.source_kind == "wakeup"
+    assert result.name == "2026 秋"
+    assert result.courses
+
+
+def test_wakeup_share_text_keeps_failure(monkeypatch):
+    async def fake_fetch_share(session, code):
+        assert code == WAKEUP_SHARE_CODE
+        raise ImportFailure("读取 WakeUp 课表失败：当前版本过低，请升级")
+
+    async def unexpected_fetch(url):
+        raise AssertionError("明确来自 WakeUp 的文案失败后不应回退 Nexio")
+
+    monkeypatch.setattr(wakeup, "fetch_share", fake_fetch_share)
+    with pytest.raises(ImportFailure, match="WakeUp.*当前版本过低"):
+        asyncio.run(detect.import_any(WAKEUP_SHARE_TEXT, fetch=unexpected_fetch))
 
 
 def test_wakeup_parse():

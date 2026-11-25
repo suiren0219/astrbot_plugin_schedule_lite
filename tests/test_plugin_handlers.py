@@ -9,7 +9,12 @@ from pathlib import Path
 
 import pytest
 
-from .test_importers import SHIGUANG_SAMPLE
+from .test_importers import (
+    SHIGUANG_SAMPLE,
+    WAKEUP_SHARE_CODE,
+    WAKEUP_SHARE_TEXT,
+    _wakeup_payload,
+)
 
 
 def _install_astrbot_stub() -> None:
@@ -2355,6 +2360,103 @@ def test_payload_wins_over_quote(plugin):
     event.message_obj.message = [Reply(id="4", message_str="这条引用没有课表")]
     outs = asyncio.run(_collect(plugin._h_import(event, _generic_import_payload("显式参数"))))
     assert "已导入课表「显式参数」" in outs[0]
+
+
+@pytest.mark.parametrize("group", ["", "g1"])
+@pytest.mark.parametrize("text", [
+    WAKEUP_SHARE_TEXT,
+    WAKEUP_SHARE_TEXT.replace("~分享", "~\n分享").replace("口令为「", "口令为：\n「"),
+])
+def test_wakeup_share_auto_import(plugin, monkeypatch, group, text):
+    from schedule_lite_core.importers import wakeup
+
+    seen = []
+
+    async def fake_fetch_share(session, code):
+        seen.append(code)
+        return _wakeup_payload()
+
+    async def unexpected_api_fetch(url):
+        raise AssertionError("WakeUp 分享文案不应访问 Nexio")
+
+    plugin._http = object()  # 仅用于通过 allow_network 判断
+    monkeypatch.setattr(wakeup, "fetch_share", fake_fetch_share)
+    monkeypatch.setattr(plugin, "_fetch_api", unexpected_api_fetch)
+    event = _Event(text, group=group)
+    outs = asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event)))
+    assert len(outs) == 1
+    assert "已导入课表「2026 秋」" in outs[0]
+    assert "WakeUp" in outs[0]
+    assert seen == [WAKEUP_SHARE_CODE]
+    assert event.stopped is True
+    tt = plugin.store.get("test:10001")
+    assert tt.courses
+    assert tt.groups == ([group] if group else [])
+    raw_path = plugin._plugin_data_dir() / tt.raw_source
+    assert raw_path.read_text(encoding="utf-8") == text
+
+
+@pytest.mark.parametrize("text", [
+    "今天讨论一下 WakeUp 课程表的分享功能",
+    WAKEUP_SHARE_CODE,
+    f"分享口令为「{WAKEUP_SHARE_CODE}」",
+    WAKEUP_SHARE_TEXT.replace(WAKEUP_SHARE_CODE, WAKEUP_SHARE_CODE[:-1]),
+    WAKEUP_SHARE_TEXT.replace(WAKEUP_SHARE_CODE, "g" * 32),
+    "/课表 导入 " + WAKEUP_SHARE_TEXT,
+    WAKEUP_SHARE_TEXT + " 这条消息应该怎样导入？",
+])
+def test_wakeup_share_auto_import_ignores_other_text(plugin, text):
+    plugin.config["allow_network"] = False
+    event = _Event(text, group="g1")
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+@pytest.mark.parametrize("component", ["Reply", "File"])
+def test_wakeup_share_auto_import_skips_reply_and_file(plugin, component):
+    from astrbot.api.message_components import File, Reply
+
+    plugin.config["allow_network"] = False
+    event = _Event(WAKEUP_SHARE_TEXT, group="g1")
+    event.message_obj.message = [
+        Reply(id="1") if component == "Reply" else File(name="课表.ics", file="/nonexistent.ics")
+    ]
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+def test_wakeup_share_auto_import_skips_claimed_message(plugin):
+    event = _Event(WAKEUP_SHARE_TEXT, group="g1")
+    event.get_extra = lambda key, default=None: {} if key == "parsed_params" else default
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+@pytest.mark.parametrize(("mode", "group"), [("whitelist", "g2"), ("blacklist", "g1")])
+def test_wakeup_share_auto_import_respects_session_scope(plugin, mode, group):
+    plugin.config["allow_network"] = False
+    plugin.config["session_scope_mode"] = mode
+    plugin.config["session_scope_list"] = "g1"
+    event = _Event(WAKEUP_SHARE_TEXT, group=group)
+    assert asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event))) == []
+    assert event.stopped is False
+    assert plugin.store.all() == {}
+
+
+def test_wakeup_share_auto_import_respects_network_setting(plugin):
+    _import_sample(plugin, _Event("/课表 导入", group="g1"))
+    old = plugin.store.get("test:10001")
+    plugin._http = object()  # 会话可用时仍应遵守禁止联网配置
+    plugin.config["allow_network"] = False
+    event = _Event(WAKEUP_SHARE_TEXT, group="g1")
+    outs = asyncio.run(_collect(plugin.cmd_wakeup_auto_import(event)))
+    assert len(outs) == 1
+    assert "禁止联网导入" in outs[0]
+    assert event.stopped is True
+    assert plugin.store.get("test:10001") is old
 
 
 def test_bare_file_auto_import_private(plugin, tmp_path):
